@@ -21,6 +21,9 @@ type State struct {
 	// LastChatID is the last chat ID used for communication
 	LastChatID string `json:"last_chat_id,omitempty"`
 
+	// LastAccount identifies the bot used for the last active channel.
+	LastAccount string `json:"last_account,omitempty"`
+
 	// Timestamp is the last time this state was updated
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -85,12 +88,16 @@ func NewManager(workspace string) *Manager {
 // SetLastChannel atomically updates the last channel and saves the state.
 // This method uses a temp file + rename pattern for atomic writes,
 // ensuring that the state file is never corrupted even if the process crashes.
-func (sm *Manager) SetLastChannel(channel string) error {
+func (sm *Manager) SetLastChannel(channel string, account ...string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	// Update state
 	sm.state.LastChannel = channel
+	sm.state.LastAccount = ""
+	if len(account) > 0 {
+		sm.state.LastAccount = account[0]
+	}
 	sm.state.Timestamp = time.Now()
 
 	// Atomic save using temp file + rename
@@ -99,6 +106,20 @@ func (sm *Manager) SetLastChannel(channel string) error {
 	}
 
 	return nil
+}
+
+// GetLastAccount returns the account used for the last active channel.
+func (sm *Manager) GetLastAccount() string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.state.LastAccount
+}
+
+// GetLastChannelAndAccount returns the last channel and its account from one snapshot.
+func (sm *Manager) GetLastChannelAndAccount() (string, string) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.state.LastChannel, sm.state.LastAccount
 }
 
 // SetLastChatID atomically updates the last chat ID and saves the state.

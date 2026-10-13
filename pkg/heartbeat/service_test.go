@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -21,6 +22,7 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 	hs.stopChan = make(chan struct{}) // Enable for testing
 
 	asyncCalled := false
+	gotAccount := ""
 	asyncResult := &tools.ToolResult{
 		ForLLM:  "Background task started",
 		ForUser: "Task started in background",
@@ -29,13 +31,17 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 		Async:   true,
 	}
 
-	hs.SetHandler(func(prompt, channel, chatID string) *tools.ToolResult {
+	hs.SetHandlerWithAccount(func(prompt, channel, chatID, account string) *tools.ToolResult {
 		asyncCalled = true
+		gotAccount = account
 		if prompt == "" {
 			t.Error("Expected non-empty prompt")
 		}
 		return asyncResult
 	})
+	if err := hs.state.SetLastChannel("weixin:user-1", "shop"); err != nil {
+		t.Fatalf("SetLastChannel() error = %v", err)
+	}
 
 	// Create HEARTBEAT.md
 	os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o644)
@@ -45,6 +51,69 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 
 	if !asyncCalled {
 		t.Error("Expected handler to be called")
+	}
+	if gotAccount != "shop" {
+		t.Fatalf("handler account = %q, want shop", gotAccount)
+	}
+}
+
+func TestExecuteHeartbeatPublishesToLastAccount(t *testing.T) {
+	tmpDir := t.TempDir()
+	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs.stopChan = make(chan struct{})
+	msgBus := bus.NewMessageBus()
+	hs.SetBus(msgBus)
+	if err := hs.state.SetLastChannel("weixin:user-1", "shop"); err != nil {
+		t.Fatalf("SetLastChannel() error = %v", err)
+	}
+	hs.SetHandlerWithAccount(func(prompt, channel, chatID, account string) *tools.ToolResult {
+		if account != "shop" {
+			t.Errorf("handler account = %q, want shop", account)
+		}
+		return &tools.ToolResult{ForUser: "heartbeat reply"}
+	})
+	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Check tasks"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	hs.executeHeartbeat()
+
+	select {
+	case msg := <-msgBus.OutboundChan():
+		if msg.Context.Account != "shop" {
+			t.Fatalf("outbound account = %q, want shop", msg.Context.Account)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for heartbeat outbound")
+	}
+}
+
+func TestExecuteHeartbeatKeepsTargetSnapshotWhenLastChannelChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs.stopChan = make(chan struct{})
+	msgBus := bus.NewMessageBus()
+	hs.SetBus(msgBus)
+	if err := hs.state.SetLastChannel("weixin:user-1", "shop"); err != nil {
+		t.Fatalf("SetLastChannel() error = %v", err)
+	}
+	hs.SetHandlerWithAccount(func(prompt, channel, chatID, account string) *tools.ToolResult {
+		if err := hs.state.SetLastChannel("weixin:user-2", "cafe"); err != nil {
+			t.Errorf("SetLastChannel() error = %v", err)
+		}
+		return &tools.ToolResult{ForUser: "heartbeat reply"}
+	})
+	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Check tasks"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	hs.executeHeartbeat()
+
+	select {
+	case msg := <-msgBus.OutboundChan():
+		if msg.Context.ChatID != "user-1" || msg.Context.Account != "shop" {
+			t.Fatalf("outbound target = %q/%q, want user-1/shop", msg.Context.ChatID, msg.Context.Account)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for heartbeat outbound")
 	}
 }
 

@@ -75,6 +75,48 @@ func TestToChannelHashes(t *testing.T) {
 	assert.Nil(t, bc)
 }
 
+func TestWeixinChannelReadyWhenOnlyExtraBotIsLinked(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channels["weixin"] = &config.Channel{
+		Enabled:  true,
+		Type:     config.ChannelWeixin,
+		Settings: config.RawNode(`{"accounts":{"shop":{"token":"shop-token"}}}`),
+	}
+	manager := &Manager{config: cfg}
+	_, ready := manager.getChannelConfigAndEnabled("weixin")
+	if !ready {
+		t.Fatal("channel with a linked extra bot was not ready")
+	}
+}
+
+func TestWeixinChannelNotReadyWhenOnlyDisabledExtraBotIsLinked(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channels["weixin"] = &config.Channel{
+		Enabled:  true,
+		Type:     config.ChannelWeixin,
+		Settings: config.RawNode(`{"accounts":{"shop":{"enabled":false,"token":"shop-token"}}}`),
+	}
+	manager := &Manager{config: cfg}
+	_, ready := manager.getChannelConfigAndEnabled("weixin")
+	if ready {
+		t.Fatal("channel with only a disabled bot was ready")
+	}
+}
+
+func TestWeixinChannelNotReadyWhenLinkedDefaultBotIsDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channels["weixin"] = &config.Channel{
+		Enabled:  true,
+		Type:     config.ChannelWeixin,
+		Settings: config.RawNode(`{"token":"default-token","accounts":{"default":{"enabled":false}}}`),
+	}
+	manager := &Manager{config: cfg}
+	_, ready := manager.getChannelConfigAndEnabled("weixin")
+	if ready {
+		t.Fatal("channel with only a disabled default bot was ready")
+	}
+}
+
 func TestToChannelHashes_SerializationStability(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Channels["test"] = &config.Channel{

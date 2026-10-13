@@ -30,6 +30,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 		SessionKey: resolveScopeKey(allocation.SessionKey, msg.SessionKey),
 		Channel:    msg.Channel,
 		ChatID:     msg.ChatID,
+		Account:    msg.Context.Account,
 	}, nil
 }
 
@@ -44,6 +45,14 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	ctx context.Context,
 	content, sessionKey, channel, chatID string,
 ) (string, error) {
+	return al.ProcessDirectWithChannelAccount(ctx, content, sessionKey, channel, chatID, "")
+}
+
+// ProcessDirectWithChannelAccount runs a direct turn with an outbound bot account.
+func (al *AgentLoop) ProcessDirectWithChannelAccount(
+	ctx context.Context,
+	content, sessionKey, channel, chatID, accountID string,
+) (string, error) {
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}
@@ -54,6 +63,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	msg := bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel:  channel,
+			Account:  accountID,
 			ChatID:   chatID,
 			ChatType: "direct",
 			SenderID: "cron",
@@ -68,6 +78,14 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 func (al *AgentLoop) ProcessHeartbeat(
 	ctx context.Context,
 	content, channel, chatID string,
+) (string, error) {
+	return al.ProcessHeartbeatWithAccount(ctx, content, channel, chatID, "")
+}
+
+// ProcessHeartbeatWithAccount runs a heartbeat for the selected outbound bot.
+func (al *AgentLoop) ProcessHeartbeatWithAccount(
+	ctx context.Context,
+	content, channel, chatID, accountID string,
 ) (string, error) {
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
@@ -87,6 +105,7 @@ func (al *AgentLoop) ProcessHeartbeat(
 	if channel != "" || chatID != "" {
 		dispatch.InboundContext = &bus.InboundContext{
 			Channel:  channel,
+			Account:  accountID,
 			ChatID:   chatID,
 			ChatType: "direct",
 			SenderID: "heartbeat",

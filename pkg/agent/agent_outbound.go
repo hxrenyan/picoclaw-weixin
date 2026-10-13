@@ -16,11 +16,17 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
-func (al *AgentLoop) maybePublishError(ctx context.Context, channel, chatID, sessionKey string, err error) bool {
+func (al *AgentLoop) maybePublishError(
+	ctx context.Context,
+	channel, chatID, sessionKey string,
+	err error,
+	account ...string,
+) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, formatProcessingError(err))
+	response := formatProcessingError(err)
+	al.PublishResponseIfNeededWithAccount(ctx, channel, chatID, sessionKey, response, firstOutboundAccount(account))
 	return true
 }
 
@@ -29,17 +35,33 @@ func (al *AgentLoop) publishResponseOrError(
 	channel, chatID, sessionKey string,
 	response string,
 	err error,
+	account ...string,
 ) {
 	if err != nil {
-		if !al.maybePublishError(ctx, channel, chatID, sessionKey, err) {
+		if !al.maybePublishError(ctx, channel, chatID, sessionKey, err, account...) {
 			return
 		}
 		response = ""
 	}
-	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+	al.PublishResponseIfNeededWithAccount(ctx, channel, chatID, sessionKey, response, firstOutboundAccount(account))
+}
+
+func firstOutboundAccount(account []string) string {
+	if len(account) == 0 {
+		return ""
+	}
+	return account[0]
 }
 
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
+	al.PublishResponseIfNeededWithAccount(ctx, channel, chatID, sessionKey, response, "")
+}
+
+// PublishResponseIfNeededWithAccount publishes a response using the selected bot account.
+func (al *AgentLoop) PublishResponseIfNeededWithAccount(
+	ctx context.Context,
+	channel, chatID, sessionKey, response, account string,
+) {
 	if response == "" {
 		return
 	}
@@ -73,8 +95,10 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 		return
 	}
 
+	outboundContext := bus.NewOutboundContext(channel, chatID, "")
+	outboundContext.Account = account
 	msg := bus.OutboundMessage{
-		Context:    bus.NewOutboundContext(channel, chatID, ""),
+		Context:    outboundContext,
 		SessionKey: sessionKey,
 		Content:    response,
 	}

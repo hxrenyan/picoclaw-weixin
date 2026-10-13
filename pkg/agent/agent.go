@@ -116,6 +116,7 @@ type continuationTarget struct {
 	SessionKey string
 	Channel    string
 	ChatID     string
+	Account    string
 }
 
 const (
@@ -277,14 +278,22 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 						SessionKey: sessionKey,
 						Channel:    m.Channel,
 						ChatID:     m.ChatID,
+						Account:    m.Context.Account,
 					}
 					continued, continueErr := al.drainQueuedSteeringContinuations(ctx, target)
 					if continueErr != nil {
-						al.maybePublishError(ctx, m.Channel, m.ChatID, sessionKey, continueErr)
+						al.maybePublishError(ctx, m.Channel, m.ChatID, sessionKey, continueErr, m.Context.Account)
 						return
 					}
 					if continued != "" {
-						al.PublishResponseIfNeeded(ctx, target.Channel, target.ChatID, target.SessionKey, continued)
+						al.PublishResponseIfNeededWithAccount(
+							ctx,
+							target.Channel,
+							target.ChatID,
+							target.SessionKey,
+							continued,
+							target.Account,
+						)
 					}
 					return
 				}
@@ -542,7 +551,11 @@ func (al *AgentLoop) runAgentLoop(
 		opts.Dispatch.ChatID() != "" &&
 		!constants.IsInternalChannel(opts.Dispatch.Channel()) {
 		channelKey := fmt.Sprintf("%s:%s", opts.Dispatch.Channel(), opts.Dispatch.ChatID())
-		if recordErr := al.RecordLastChannel(channelKey); recordErr != nil {
+		account := ""
+		if opts.Dispatch.InboundContext != nil {
+			account = opts.Dispatch.InboundContext.Account
+		}
+		if recordErr := al.RecordLastChannel(channelKey, account); recordErr != nil {
 			logger.WarnCF(
 				"agent",
 				"Failed to record last channel",

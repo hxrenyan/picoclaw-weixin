@@ -29,6 +29,7 @@ type CronPayload struct {
 	Command string `json:"command,omitempty"`
 	Channel string `json:"channel,omitempty"`
 	To      string `json:"to,omitempty"`
+	Account string `json:"account,omitempty"`
 }
 
 type CronJobState struct {

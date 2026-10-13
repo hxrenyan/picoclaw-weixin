@@ -3,6 +3,7 @@ package weixin
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
@@ -131,11 +132,23 @@ func (m *multiWeixinChannel) VoiceCapabilities() channels.VoiceCapabilities {
 }
 
 func (m *multiWeixinChannel) botForOutbound(account string, scope *bus.OutboundScope) *WeixinChannel {
-	bot := m.botFor(account)
-	if bot == nil && scope != nil {
-		bot = m.botFor(scope.Account)
+	hasAccount := strings.TrimSpace(account) != ""
+	if hasAccount {
+		if bot := m.botFor(account); bot != nil {
+			return bot
+		}
 	}
-	return bot
+	hasScopeAccount := scope != nil && strings.TrimSpace(scope.Account) != ""
+	if hasScopeAccount {
+		if bot := m.botFor(scope.Account); bot != nil {
+			return bot
+		}
+	}
+	// An explicit but unknown account must not be sent from another bot's identity.
+	if hasAccount || hasScopeAccount {
+		return nil
+	}
+	return m.botFor("")
 }
 
 func (m *multiWeixinChannel) botFor(account string) *WeixinChannel {

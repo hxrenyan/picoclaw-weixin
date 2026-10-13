@@ -24,6 +24,20 @@ type JobExecutor interface {
 	PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string)
 }
 
+type accountJobExecutor interface {
+	ProcessDirectWithChannelAccount(
+		ctx context.Context,
+		content, sessionKey, channel, chatID, account string,
+	) (string, error)
+	PublishResponseIfNeededWithAccount(ctx context.Context, channel, chatID, sessionKey, response, account string)
+}
+
+func jobOutboundContext(channel, chatID, account string) bus.InboundContext {
+	outboundContext := bus.NewOutboundContext(channel, chatID, "")
+	outboundContext.Account = account
+	return outboundContext
+}
+
 // CronTool provides scheduling capabilities for the agent
 type CronTool struct {
 	cronService           *cron.CronService
@@ -244,9 +258,12 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
 	}
-
 	// Apply optional payload fields and persist in a single UpdateJob call
 	needsUpdate := false
+	if scope := ToolSessionScope(ctx); scope != nil {
+		job.Payload.Account = scope.Account
+		needsUpdate = true
+	}
 	if command != "" {
 		job.Payload.Command = command
 		needsUpdate = true
@@ -611,7 +628,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
 			t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Context: bus.NewOutboundContext(channel, chatID, ""),
+				Context: jobOutboundContext(channel, chatID, job.Payload.Account),
 				Content: output,
 			})
 			return "ok"
@@ -635,7 +652,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
 		t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Context: bus.NewOutboundContext(channel, chatID, ""),
+			Context: jobOutboundContext(channel, chatID, job.Payload.Account),
 			Content: output,
 		})
 		return "ok"
@@ -644,19 +661,31 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	sessionKey := fmt.Sprintf("agent:cron-%s-%s", job.ID, uuid.New().String())
 
 	// Call agent with the job message
-	response, err := t.executor.ProcessDirectWithChannel(
-		ctx,
-		job.Payload.Message,
-		sessionKey,
-		channel,
-		chatID,
-	)
+	var response string
+	var err error
+	account := job.Payload.Account
+	if executor, ok := t.executor.(accountJobExecutor); ok {
+		response, err = executor.ProcessDirectWithChannelAccount(
+			ctx,
+			job.Payload.Message,
+			sessionKey,
+			channel,
+			chatID,
+			account,
+		)
+	} else {
+		response, err = t.executor.ProcessDirectWithChannel(ctx, job.Payload.Message, sessionKey, channel, chatID)
+	}
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
 	if response != "" {
-		t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+		if executor, ok := t.executor.(accountJobExecutor); ok {
+			executor.PublishResponseIfNeededWithAccount(ctx, channel, chatID, sessionKey, response, account)
+		} else {
+			t.executor.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
+		}
 	}
 	return "ok"
 }

@@ -35,7 +35,7 @@
 |---|---|
 | 一个 Bot | 一次扫码、一个微信账号、一份令牌。同一个微信号不能绑到两个 Bot。 |
 | 每个人的记忆 | 按 Bot 分开，存在磁盘上。对话变长后，较早的内容收成摘要，仍留在这个人的会话里。 |
-| 多个微信渠道 | 可以。`channel_list` 里写多条 `type: weixin`，每条自己最多 64 个 Bot。渠道要能启动，它自己的顶层 `token` 必须有值。 |
+| 多个微信渠道 | 可以。`channel_list` 里写多条 `type: weixin`，每条自己最多 64 个 Bot。每条渠道至少有一个启用且已绑定（有 token）的 Bot 才会启动。 |
 | 按人分发 | 消息里的 `from_user_id` 会写到 `sender`。`when.sender` 可以把不同微信用户交给不同 Agent。一个 Bot 就够。 |
 | 按 Bot 分发 | `when.channel` 填渠道名字，`when.account` 填 Bot key，例如 `shop`。 |
 | 别的服务展示二维码 | 可以。网关 `POST /api/weixin/binds`，请求头带 `Authorization: Bearer <bind_token>`。不指定 `account` 时每次新建一个 Bot。说明见 [微信渠道文档](README.zh.md)。 |

@@ -108,3 +108,27 @@ func TestMultiWeixinSendUsesTheBotThatReceivedTheMessage(t *testing.T) {
 		t.Fatalf("Authorization = %q, want shop token", got)
 	}
 }
+
+func TestBotForOutboundUsesScopeAccountBeforeDefaultFallback(t *testing.T) {
+	defaultBot := &WeixinChannel{}
+	shopBot := &WeixinChannel{}
+	multi := &multiWeixinChannel{bots: map[string]*WeixinChannel{
+		DefaultAccountKey: defaultBot,
+		"shop":            shopBot,
+	}}
+	if got := multi.botForOutbound("", &bus.OutboundScope{Account: "shop"}); got != shopBot {
+		t.Fatal("scope account did not select shop bot")
+	}
+	if got := multi.botForOutbound("missing", &bus.OutboundScope{Account: "shop"}); got != shopBot {
+		t.Fatal("scope account did not recover from an unknown context account")
+	}
+	if got := multi.botForOutbound("", nil); got != defaultBot {
+		t.Fatal("missing account did not fall back to default bot")
+	}
+	if got := multi.botForOutbound("missing", nil); got != nil {
+		t.Fatal("unknown context account fell back to another bot")
+	}
+	if got := multi.botForOutbound("", &bus.OutboundScope{Account: "missing"}); got != nil {
+		t.Fatal("unknown scope account fell back to another bot")
+	}
+}

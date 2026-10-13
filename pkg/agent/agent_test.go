@@ -453,7 +453,7 @@ func TestPublishResponseIfNeeded_MarksFinalOutbound(t *testing.T) {
 	defer cleanup()
 	_ = provider
 
-	al.PublishResponseIfNeeded(context.Background(), "pico", "pico:session-1", "session-1", "final reply")
+	al.PublishResponseIfNeededWithAccount(context.Background(), "weixin", "chat-1", "session-1", "final reply", "shop")
 
 	select {
 	case outbound := <-msgBus.OutboundChan():
@@ -465,6 +465,9 @@ func TestPublishResponseIfNeeded_MarksFinalOutbound(t *testing.T) {
 		}
 		if outbound.SessionKey != "session-1" {
 			t.Fatalf("outbound session key = %q, want session-1", outbound.SessionKey)
+		}
+		if outbound.Context.Account != "shop" {
+			t.Fatalf("outbound account = %q, want shop", outbound.Context.Account)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected final outbound")

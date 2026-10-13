@@ -20,7 +20,7 @@ func TestAtomicSave(t *testing.T) {
 	sm := NewManager(tmpDir)
 
 	// Test SetLastChannel
-	err = sm.SetLastChannel("test-channel")
+	err = sm.SetLastChannel("test-channel", "shop")
 	if err != nil {
 		t.Fatalf("SetLastChannel failed: %v", err)
 	}
@@ -46,6 +46,9 @@ func TestAtomicSave(t *testing.T) {
 	sm2 := NewManager(tmpDir)
 	if sm2.GetLastChannel() != "test-channel" {
 		t.Errorf("Expected persistent channel 'test-channel', got '%s'", sm2.GetLastChannel())
+	}
+	if sm2.GetLastAccount() != "shop" {
+		t.Errorf("Expected persistent account 'shop', got '%s'", sm2.GetLastAccount())
 	}
 }
 

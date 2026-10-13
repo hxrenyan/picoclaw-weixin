@@ -60,11 +60,11 @@ func (al *AgentLoop) SetReloadFunc(fn func() error) {
 	al.reloadFunc = fn
 }
 
-func (al *AgentLoop) RecordLastChannel(channel string) error {
+func (al *AgentLoop) RecordLastChannel(channel string, account ...string) error {
 	if al.state == nil {
 		return nil
 	}
-	return al.state.SetLastChannel(channel)
+	return al.state.SetLastChannel(channel, account...)
 }
 
 func (al *AgentLoop) RecordLastChatID(chatID string) error {

@@ -12,20 +12,23 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/cron"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 type stubJobExecutor struct {
-	response        string
-	err             error
-	alreadySent     bool // simulate message tool having already sent in this round
-	lastPrompt      string
-	lastKey         string
-	lastChan        string
-	lastChatID      string
-	publishedResp   string
-	publishedChan   string
-	publishedChatID string
-	publishedKey    string
+	response         string
+	err              error
+	alreadySent      bool // simulate message tool having already sent in this round
+	lastPrompt       string
+	lastKey          string
+	lastChan         string
+	lastChatID       string
+	publishedResp    string
+	publishedChan    string
+	publishedChatID  string
+	publishedKey     string
+	lastAccount      string
+	publishedAccount string
 }
 
 func (s *stubJobExecutor) ProcessDirectWithChannel(
@@ -39,6 +42,14 @@ func (s *stubJobExecutor) ProcessDirectWithChannel(
 	return s.response, s.err
 }
 
+func (s *stubJobExecutor) ProcessDirectWithChannelAccount(
+	ctx context.Context,
+	content, sessionKey, channel, chatID, account string,
+) (string, error) {
+	s.lastAccount = account
+	return s.ProcessDirectWithChannel(ctx, content, sessionKey, channel, chatID)
+}
+
 func (s *stubJobExecutor) PublishResponseIfNeeded(
 	_ context.Context,
 	channel, chatID, sessionKey, response string,
@@ -50,6 +61,14 @@ func (s *stubJobExecutor) PublishResponseIfNeeded(
 	s.publishedChan = channel
 	s.publishedChatID = chatID
 	s.publishedKey = sessionKey
+}
+
+func (s *stubJobExecutor) PublishResponseIfNeededWithAccount(
+	ctx context.Context,
+	channel, chatID, sessionKey, response, account string,
+) {
+	s.publishedAccount = account
+	s.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 }
 
 func newTestCronToolWithExecutorAndConfig(t *testing.T, executor JobExecutor, cfg *config.Config) *CronTool {
@@ -389,6 +408,24 @@ func TestCronTool_AddJobRequiresSessionContext(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "no session context") {
 		t.Errorf("expected 'no session context' message, got: %s", result.ForLLM)
+	}
+}
+
+func TestCronTool_AddJobPersistsSessionAccount(t *testing.T) {
+	tool := newTestCronTool(t)
+	ctx := WithToolContext(context.Background(), "weixin", "chat-1")
+	ctx = WithToolSessionContext(ctx, "main", "session-1", &session.SessionScope{Account: "shop"})
+	result := tool.Execute(ctx, map[string]any{
+		"action":        "add",
+		"message":       "reminder",
+		"every_seconds": float64(60),
+	})
+	if result.IsError {
+		t.Fatalf("add job failed: %s", result.ForLLM)
+	}
+	jobs := tool.cronService.ListJobs(true)
+	if len(jobs) != 1 || jobs[0].Payload.Account != "shop" {
+		t.Fatalf("stored cron account = %+v, want shop", jobs)
 	}
 }
 
@@ -1146,6 +1183,7 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	job.Payload.Channel = "cli"
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"
+	job.Payload.Account = "shop"
 
 	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
@@ -1164,6 +1202,9 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	if !strings.Contains(msg.Content, "command execution is disabled") {
 		t.Fatalf("expected exec disabled message, got: %s", msg.Content)
 	}
+	if msg.Context.Account != "shop" {
+		t.Fatalf("outbound account = %q, want shop", msg.Context.Account)
+	}
 }
 
 func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
@@ -1174,6 +1215,7 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send me a poem"
+	job.Payload.Account = "shop"
 
 	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
 		t.Fatalf("ExecuteJob() = %q, want ok", got)
@@ -1184,6 +1226,9 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	}
 	if executor.lastChan != "telegram" || executor.lastChatID != "chat-1" {
 		t.Fatalf("executor target = %s/%s, want telegram/chat-1", executor.lastChan, executor.lastChatID)
+	}
+	if executor.lastAccount != "shop" {
+		t.Fatalf("executor account = %q, want shop", executor.lastAccount)
 	}
 	if executor.lastPrompt != "send me a poem" {
 		t.Fatalf("prompt = %q, want original message", executor.lastPrompt)
@@ -1196,6 +1241,9 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	}
 	if executor.publishedChan != "telegram" || executor.publishedChatID != "chat-1" {
 		t.Fatalf("published target = %s/%s, want telegram/chat-1", executor.publishedChan, executor.publishedChatID)
+	}
+	if executor.publishedAccount != "shop" {
+		t.Fatalf("published account = %q, want shop", executor.publishedAccount)
 	}
 }
 

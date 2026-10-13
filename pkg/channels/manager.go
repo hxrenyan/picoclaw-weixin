@@ -1062,7 +1062,26 @@ func (m *Manager) getChannelConfigAndEnabled(channelName string) (*config.Channe
 	case *config.SlackSettings:
 		return bc, settings.BotToken.String() != ""
 	case *config.WeixinSettings:
-		return bc, settings.Token.String() != ""
+		defaultEnabled := true
+		defaultHasToken := strings.TrimSpace(settings.Token.String()) != ""
+		for key, account := range settings.Accounts {
+			if strings.EqualFold(strings.TrimSpace(key), "default") {
+				if account.Enabled != nil && !*account.Enabled {
+					defaultEnabled = false
+				}
+				if strings.TrimSpace(account.Token.String()) != "" {
+					defaultHasToken = true
+				}
+				continue
+			}
+			if account.Enabled != nil && !*account.Enabled {
+				continue
+			}
+			if strings.TrimSpace(account.Token.String()) != "" {
+				return bc, true
+			}
+		}
+		return bc, defaultEnabled && defaultHasToken
 	case *config.PicoSettings:
 		return bc, settings.Token.String() != ""
 	case *config.IRCSettings:

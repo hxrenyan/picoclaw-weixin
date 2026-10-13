@@ -34,16 +34,20 @@ const (
 // channel and chatID are derived from the last active user channel.
 type HeartbeatHandler func(prompt, channel, chatID string) *tools.ToolResult
 
+// HeartbeatAccountHandler is a heartbeat handler that receives the channel account.
+type HeartbeatAccountHandler func(prompt, channel, chatID, account string) *tools.ToolResult
+
 // HeartbeatService manages periodic heartbeat checks
 type HeartbeatService struct {
-	workspace string
-	bus       *bus.MessageBus
-	state     *state.Manager
-	handler   HeartbeatHandler
-	interval  time.Duration
-	enabled   bool
-	mu        sync.RWMutex
-	stopChan  chan struct{}
+	workspace      string
+	bus            *bus.MessageBus
+	state          *state.Manager
+	handler        HeartbeatHandler
+	accountHandler HeartbeatAccountHandler
+	interval       time.Duration
+	enabled        bool
+	mu             sync.RWMutex
+	stopChan       chan struct{}
 }
 
 // NewHeartbeatService creates a new heartbeat service
@@ -77,6 +81,15 @@ func (hs *HeartbeatService) SetHandler(handler HeartbeatHandler) {
 	hs.mu.Lock()
 	defer hs.mu.Unlock()
 	hs.handler = handler
+	hs.accountHandler = nil
+}
+
+// SetHandlerWithAccount sets a heartbeat handler that receives the bot account.
+func (hs *HeartbeatService) SetHandlerWithAccount(handler HeartbeatAccountHandler) {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	hs.accountHandler = handler
+	hs.handler = nil
 }
 
 // Start begins the heartbeat service
@@ -150,6 +163,7 @@ func (hs *HeartbeatService) executeHeartbeat() {
 	hs.mu.RLock()
 	enabled := hs.enabled
 	handler := hs.handler
+	accountHandler := hs.accountHandler
 	if !hs.enabled || hs.stopChan == nil {
 		hs.mu.RUnlock()
 		return
@@ -168,19 +182,24 @@ func (hs *HeartbeatService) executeHeartbeat() {
 		return
 	}
 
-	if handler == nil {
+	if handler == nil && accountHandler == nil {
 		hs.logErrorf("Heartbeat handler not configured")
 		return
 	}
 
 	// Get last channel info for context
-	lastChannel := hs.state.GetLastChannel()
+	lastChannel, account := hs.state.GetLastChannelAndAccount()
 	channel, chatID := hs.parseLastChannel(lastChannel)
 
 	// Debug log for channel resolution
 	hs.logInfof("Resolved channel: %s, chatID: %s (from lastChannel: %s)", channel, chatID, lastChannel)
 
-	result := handler(prompt, channel, chatID)
+	var result *tools.ToolResult
+	if accountHandler != nil {
+		result = accountHandler(prompt, channel, chatID, account)
+	} else {
+		result = handler(prompt, channel, chatID)
+	}
 
 	if result == nil {
 		hs.logInfof("Heartbeat handler returned nil result")
@@ -210,9 +229,9 @@ func (hs *HeartbeatService) executeHeartbeat() {
 
 	// Send result to user
 	if result.ForUser != "" {
-		hs.sendResponse(result.ForUser)
+		hs.sendResponse(result.ForUser, channel, chatID, account)
 	} else if result.ForLLM != "" {
-		hs.sendResponse(result.ForLLM)
+		hs.sendResponse(result.ForLLM, channel, chatID, account)
 	}
 
 	hs.logInfof("Heartbeat completed: %s", result.ForLLM)
@@ -311,8 +330,9 @@ func heartbeatHasUserTasks(content string) bool {
 	return false
 }
 
-// sendResponse sends the heartbeat response to the last channel
-func (hs *HeartbeatService) sendResponse(response string) {
+// sendResponse sends the heartbeat response to the target resolved before the handler ran,
+// so a message arriving mid-heartbeat cannot pair a new chat with the old bot account.
+func (hs *HeartbeatService) sendResponse(response, platform, userID, account string) {
 	hs.mu.RLock()
 	msgBus := hs.bus
 	hs.mu.RUnlock()
@@ -322,24 +342,18 @@ func (hs *HeartbeatService) sendResponse(response string) {
 		return
 	}
 
-	// Get last channel from state
-	lastChannel := hs.state.GetLastChannel()
-	if lastChannel == "" {
-		hs.logInfof("No last channel recorded, heartbeat result not sent")
-		return
-	}
-
-	platform, userID := hs.parseLastChannel(lastChannel)
-
-	// Skip internal channels that can't receive messages
+	// Skip missing or internal channels that can't receive messages
 	if platform == "" || userID == "" {
+		hs.logInfof("No deliverable last channel recorded, heartbeat result not sent")
 		return
 	}
 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
+	outboundContext := bus.NewOutboundContext(platform, userID, "")
+	outboundContext.Account = account
 	msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-		Context: bus.NewOutboundContext(platform, userID, ""),
+		Context: outboundContext,
 		Content: response,
 	})
 

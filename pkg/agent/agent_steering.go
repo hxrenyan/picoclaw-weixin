@@ -15,14 +15,22 @@ func (al *AgentLoop) processMessageSync(ctx context.Context, msg bus.InboundMess
 	}
 
 	response, err := al.processMessage(ctx, msg)
-	al.publishResponseOrError(ctx, msg.Channel, msg.ChatID, msg.SessionKey, response, err)
+	al.publishResponseOrError(ctx, msg.Channel, msg.ChatID, msg.SessionKey, response, err, msg.Context.Account)
 }
 
 func (al *AgentLoop) runTurnWithSteering(ctx context.Context, initialMsg bus.InboundMessage) {
 	// Process the initial message
 	response, err := al.processMessage(ctx, initialMsg)
 	if err != nil {
-		if !al.maybePublishError(ctx, initialMsg.Channel, initialMsg.ChatID, initialMsg.SessionKey, err) {
+		published := al.maybePublishError(
+			ctx,
+			initialMsg.Channel,
+			initialMsg.ChatID,
+			initialMsg.SessionKey,
+			err,
+			initialMsg.Context.Account,
+		)
+		if !published {
 			return // context canceled
 		}
 		response = ""
@@ -58,7 +66,14 @@ func (al *AgentLoop) runTurnWithSteering(ctx context.Context, initialMsg bus.Inb
 
 	// Publish final response
 	if finalResponse != "" {
-		al.PublishResponseIfNeeded(ctx, target.Channel, target.ChatID, target.SessionKey, finalResponse)
+		al.PublishResponseIfNeededWithAccount(
+			ctx,
+			target.Channel,
+			target.ChatID,
+			target.SessionKey,
+			finalResponse,
+			target.Account,
+		)
 	}
 }
 
