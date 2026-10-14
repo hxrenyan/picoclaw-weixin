@@ -5,9 +5,45 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
+
+func TestLockConfigSerializesEquivalentPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	unlock, err := LockConfig(path)
+	if err != nil {
+		t.Fatalf("LockConfig() error = %v", err)
+	}
+	started := make(chan struct{})
+	acquired := make(chan struct{})
+
+	go func() {
+		close(started)
+		secondUnlock, err := LockConfig(filepath.Join(filepath.Dir(path), ".", filepath.Base(path)))
+		if err != nil {
+			t.Errorf("second LockConfig() error = %v", err)
+			return
+		}
+		close(acquired)
+		secondUnlock()
+	}()
+	<-started
+
+	select {
+	case <-acquired:
+		t.Fatal("second lock acquired before the first lock was released")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	unlock()
+	select {
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("second lock did not acquire after the first lock was released")
+	}
+}
 
 func TestListAccountsKeepsLegacyBotAsDefault(t *testing.T) {
 	settings := &config.WeixinSettings{}

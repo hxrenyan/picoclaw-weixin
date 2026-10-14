@@ -241,21 +241,35 @@ func (h *Handler) handlePollWeixinFlow(w http.ResponseWriter, r *http.Request) {
 // saveWeixinBinding writes one bot's token, enables the Weixin channel,
 // and best-effort restarts the gateway when it is currently running.
 func (h *Handler) saveWeixinBinding(accountKey, token, accountID, userID, baseURL string) error {
+	if err := h.updateWeixinConfig(func(cfg *config.Config) error {
+		_, settings, err := weixin.EnsureWeixinChannel(cfg, config.ChannelWeixin)
+		if err != nil {
+			return err
+		}
+		return weixin.UpsertCredentials(settings, accountKey, "", token, userID, accountID, baseURL, "")
+	}); err != nil {
+		return err
+	}
+	h.restartGatewayIfRunning("saving binding")
+	return nil
+}
+
+func (h *Handler) updateWeixinConfig(update func(*config.Config) error) error {
+	unlock, err := weixin.LockConfig(h.configPath)
+	if err != nil {
+		return fmt.Errorf("lock config: %w", err)
+	}
+	defer unlock()
 	cfg, err := config.LoadConfig(h.configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	_, settings, err := weixin.EnsureWeixinChannel(cfg, config.ChannelWeixin)
-	if err != nil {
-		return err
-	}
-	if err := weixin.UpsertCredentials(settings, accountKey, "", token, userID, accountID, baseURL, ""); err != nil {
+	if err := update(cfg); err != nil {
 		return err
 	}
 	if err := config.SaveConfig(h.configPath, cfg); err != nil {
-		return err
+		return fmt.Errorf("save config: %w", err)
 	}
-	h.restartGatewayIfRunning("saving binding")
 	return nil
 }
 
@@ -267,23 +281,22 @@ func (h *Handler) handleCreateWeixinAccount(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-	_, settings, err := weixin.EnsureWeixinChannel(cfg, config.ChannelWeixin)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	key, err := weixin.EnsureAccount(settings, req.Name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
-		http.Error(w, fmt.Sprintf("save config: %v", err), http.StatusInternalServerError)
+	var key string
+	if err := h.updateWeixinConfig(func(cfg *config.Config) error {
+		_, settings, err := weixin.EnsureWeixinChannel(cfg, config.ChannelWeixin)
+		if err != nil {
+			return err
+		}
+		key, err = weixin.EnsureAccount(settings, req.Name)
+		return err
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if !strings.HasPrefix(err.Error(), "lock config:") &&
+			!strings.HasPrefix(err.Error(), "load config:") &&
+			!strings.HasPrefix(err.Error(), "save config:") {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -299,27 +312,28 @@ func (h *Handler) handleDeleteWeixinAccount(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "missing account", http.StatusBadRequest)
 		return
 	}
-	cfg, err := config.LoadConfig(h.configPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("load config: %v", err), http.StatusInternalServerError)
-		return
-	}
-	bc := cfg.Channels.Get(config.ChannelWeixin)
-	if bc == nil {
-		http.Error(w, "weixin channel is not configured", http.StatusNotFound)
-		return
-	}
-	settings, err := decodeWeixinSettings(bc)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := weixin.RemoveAccount(settings, accountKey); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := config.SaveConfig(h.configPath, cfg); err != nil {
-		http.Error(w, fmt.Sprintf("save config: %v", err), http.StatusInternalServerError)
+	if err := h.updateWeixinConfig(func(cfg *config.Config) error {
+		bc := cfg.Channels.Get(config.ChannelWeixin)
+		if bc == nil {
+			return fmt.Errorf("weixin channel is not configured")
+		}
+		settings, err := decodeWeixinSettings(bc)
+		if err != nil {
+			return err
+		}
+		return weixin.RemoveAccount(settings, accountKey)
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if strings.HasPrefix(err.Error(), "lock config:") ||
+			strings.HasPrefix(err.Error(), "load config:") ||
+			strings.HasPrefix(err.Error(), "save config:") {
+			status = http.StatusInternalServerError
+		} else if strings.Contains(err.Error(), "not configured") {
+			status = http.StatusNotFound
+		} else {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	h.restartGatewayIfRunning("removing weixin account")

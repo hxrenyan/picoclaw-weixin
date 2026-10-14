@@ -1,15 +1,18 @@
 package api
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/channels/weixin"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -99,5 +102,51 @@ func TestSaveWeixinBindingKeepsBotsSeparate(t *testing.T) {
 	}
 	if shop.BaseURL != "https://region.ilinkai.weixin.qq.com/" {
 		t.Fatalf("shop base url = %q", shop.BaseURL)
+	}
+}
+
+func TestConcurrentWeixinAccountUpdatesAreSerialized(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := config.SaveConfig(configPath, config.DefaultConfig()); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	h := NewHandler(configPath)
+
+	const accountCount = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, accountCount)
+	for i := 0; i < accountCount; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			err := h.updateWeixinConfig(func(cfg *config.Config) error {
+				_, settings, err := weixin.EnsureWeixinChannel(cfg, config.ChannelWeixin)
+				if err != nil {
+					return err
+				}
+				return weixin.UpsertCredentials(settings, fmt.Sprintf("bot-%d", i), "", fmt.Sprintf("token-%d", i), "", fmt.Sprintf("id-%d", i), "", "")
+			})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("updateWeixinConfig() error = %v", err)
+		}
+	}
+
+	savedCfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	decoded, err := savedCfg.Channels[config.ChannelWeixin].GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	settings := decoded.(*config.WeixinSettings)
+	if got := len(settings.Accounts); got != accountCount {
+		t.Fatalf("saved accounts = %d, want %d", got, accountCount)
 	}
 }

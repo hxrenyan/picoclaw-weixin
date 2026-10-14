@@ -55,7 +55,6 @@ type BindAPI struct {
 	newClient  func(baseURL, proxy string) (qrAPI, error)
 
 	mu       sync.Mutex
-	configMu sync.Mutex
 	flows    map[string]*bindFlow
 }
 
@@ -369,8 +368,11 @@ func (a *BindAPI) confirmFlow(flow *bindFlow, statusResp *StatusResponse) {
 }
 
 func (a *BindAPI) saveBinding(channelName, accountKey, name, token, userID, botID, baseURL string) error {
-	a.configMu.Lock()
-	defer a.configMu.Unlock()
+	unlock, err := LockConfig(a.configPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	cfg, err := config.LoadConfig(a.configPath)
 	if err != nil {
 		return err
@@ -386,8 +388,11 @@ func (a *BindAPI) saveBinding(channelName, accountKey, name, token, userID, botI
 }
 
 func (a *BindAPI) reserveAccount(channelName, account, name string) (string, bool, string, string, error) {
-	a.configMu.Lock()
-	defer a.configMu.Unlock()
+	unlock, err := LockConfig(a.configPath)
+	if err != nil {
+		return "", false, "", "", err
+	}
+	defer unlock()
 	cfg, err := config.LoadConfig(a.configPath)
 	if err != nil {
 		return "", false, "", "", err
@@ -442,8 +447,14 @@ func reserveBindAccount(settings *config.WeixinSettings, account, name string) (
 }
 
 func (a *BindAPI) releaseAccount(channelName, accountKey string) {
-	a.configMu.Lock()
-	defer a.configMu.Unlock()
+	unlock, err := LockConfig(a.configPath)
+	if err != nil {
+		logger.WarnCF("weixin", "Failed to lock config while releasing account", map[string]any{
+			"error": err.Error(),
+		})
+		return
+	}
+	defer unlock()
 	cfg, err := config.LoadConfig(a.configPath)
 	if err != nil {
 		return

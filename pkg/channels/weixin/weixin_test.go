@@ -378,3 +378,36 @@ func TestSendUploadedMedia_SendsCaptionAsSeparateTextBeforeMedia(t *testing.T) {
 		t.Fatalf("second request image media = %+v, want media ref", requests[1].Msg.ItemList[0].ImageItem)
 	}
 }
+
+func TestHandleInboundMessageRejectsSenderBeforeDownloadingMedia(t *testing.T) {
+	var requests int
+	ch, err := NewWeixinChannel(&config.Channel{
+		Type:      config.ChannelWeixin,
+		AllowFrom: []string{"allowed-user"},
+	}, &config.WeixinSettings{}, nil)
+	if err != nil {
+		t.Fatalf("NewWeixinChannel() error = %v", err)
+	}
+	ch.api.HttpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusForbidden,
+			Body:       io.NopCloser(bytes.NewReader(nil)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	ch.handleInboundMessage(context.Background(), WeixinMessage{
+		FromUserID: "blocked-user",
+		ItemList: []MessageItem{{
+			Type: MessageItemTypeImage,
+			ImageItem: &ImageItem{Media: &CDNMedia{
+				FullURL: "https://cdn.example.test/image",
+			}},
+		}},
+	})
+
+	if requests != 0 {
+		t.Fatalf("media requests = %d, want 0 for a rejected sender", requests)
+	}
+}

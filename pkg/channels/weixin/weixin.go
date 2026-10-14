@@ -366,6 +366,20 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		return
 	}
 
+	sender := bus.SenderInfo{
+		Platform:    "weixin",
+		PlatformID:  fromUserID,
+		CanonicalID: identity.BuildCanonicalID("weixin", fromUserID),
+		Username:    fromUserID,
+		DisplayName: fromUserID,
+	}
+	if !c.IsAllowedSender(sender) {
+		logger.DebugCF("weixin", "Message rejected by allowlist", map[string]any{
+			"from_user_id": fromUserID,
+		})
+		return
+	}
+
 	messageID := msg.ClientID
 	if messageID == "" {
 		messageID = uuid.New().String()
@@ -416,21 +430,6 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 
 	content := strings.Join(parts, "\n")
 	if content == "" && len(mediaRefs) == 0 {
-		return
-	}
-
-	sender := bus.SenderInfo{
-		Platform:    "weixin",
-		PlatformID:  fromUserID,
-		CanonicalID: identity.BuildCanonicalID("weixin", fromUserID),
-		Username:    fromUserID,
-		DisplayName: fromUserID,
-	}
-
-	if !c.IsAllowedSender(sender) {
-		logger.DebugCF("weixin", "Message rejected by allowlist", map[string]any{
-			"from_user_id": fromUserID,
-		})
 		return
 	}
 

@@ -2,6 +2,7 @@ package weixin
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -9,6 +10,19 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
+
+// LockConfig 串行化同一微信配置文件的读改写操作，并返回解锁函数。
+func LockConfig(path string) (func(), error) {
+	cleanPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	lockFile, err := lockWeixinConfigFile(filepath.Clean(cleanPath) + ".weixin.lock")
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = lockFile.Close() }, nil
+}
 
 const (
 	// DefaultAccountKey is the first WeChat bot. Its credentials stay on the
