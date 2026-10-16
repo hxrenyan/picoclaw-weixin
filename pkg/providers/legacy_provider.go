@@ -149,17 +149,30 @@ func modelConfigTemplateScore(modelCfg *config.ModelConfig, defaultProvider stri
 // The old providers config is automatically converted to model_list during config loading.
 // Returns the provider, the model ID to use, and any error.
 func CreateProvider(cfg *config.Config) (LLMProvider, string, error) {
+	provider, selected, err := CreateProviderWithConfig(cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	return provider, selected.Model, nil
+}
+
+// CreateProviderWithConfig 返回 provider 及同一次选择的模型配置，避免调用方重新轮询别名。
+func CreateProviderWithConfig(cfg *config.Config) (LLMProvider, *config.ModelConfig, error) {
 	model := cfg.Agents.Defaults.GetModelName()
 
 	// Must have model_list at this point
 	if len(cfg.ModelList) == 0 {
-		return nil, "", fmt.Errorf("no providers configured. Please add entries to model_list in your config")
+		return nil, nil, fmt.Errorf("no providers configured. Please add entries to model_list in your config")
 	}
 
 	modelCfg, err := ResolveModelConfig(cfg, model)
 	if err != nil {
-		return nil, "", fmt.Errorf("model %q not found in model_list: %w", model, err)
+		return nil, nil, fmt.Errorf("model %q not found in model_list: %w", model, err)
 	}
+
+	// 配置身份保留原 workspace；全局 workspace 仅用于本次 provider 初始化。
+	selected := *modelCfg
+	selected.Provider, selected.Model = ExtractProtocol(modelCfg)
 
 	// Inject global workspace if not set in model config
 	if modelCfg.Workspace == "" {
@@ -169,8 +182,9 @@ func CreateProvider(cfg *config.Config) (LLMProvider, string, error) {
 	// Use factory to create provider
 	provider, modelID, err := CreateProviderFromConfig(modelCfg)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to create provider for model %q: %w", model, err)
+		return nil, nil, fmt.Errorf("failed to create provider for model %q: %w", model, err)
 	}
 
-	return provider, modelID, nil
+	selected.Model = modelID
+	return provider, &selected, nil
 }

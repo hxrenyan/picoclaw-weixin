@@ -191,17 +191,14 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		}
 	}()
 
-	provider, modelID, err := createStartupProvider(cfg, allowEmptyStartup)
+	provider, primaryModelConfig, err := createStartupProvider(cfg, allowEmptyStartup)
 	if err != nil {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	if modelID != "" {
-		cfg.Agents.Defaults.ModelName = modelID
-	}
-
+	// 保留模型别名及协议，让独立 Agent 能按原配置创建自己的 provider。
 	msgBus := bus.NewMessageBus()
-	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider, agent.WithPrimaryModelConfig(primaryModelConfig))
 	msgBus.SetEventPublisher(agentLoop.RuntimeEventBus())
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayStart, startedAt, nil)
 
@@ -400,7 +397,7 @@ func executeReload(
 func createStartupProvider(
 	cfg *config.Config,
 	allowEmptyStartup bool,
-) (providers.LLMProvider, string, error) {
+) (providers.LLMProvider, *config.ModelConfig, error) {
 	modelName := cfg.Agents.Defaults.GetModelName()
 	if modelName == "" && allowEmptyStartup {
 		reason := "no default model configured; gateway started in limited mode"
@@ -408,14 +405,10 @@ func createStartupProvider(
 		logger.WarnCF("gateway", "Gateway started without default model", map[string]any{
 			"limited_mode": true,
 		})
-		return &startupBlockedProvider{reason: reason}, "", nil
+		return &startupBlockedProvider{reason: reason}, nil, nil
 	}
 
-	provider, modelID, err := providers.CreateProvider(cfg)
-	if err != nil {
-		return nil, "", err
-	}
-	return provider, modelID, nil
+	return providers.CreateProviderWithConfig(cfg)
 }
 
 func setupAndStartServices(
@@ -618,7 +611,7 @@ func handleConfigReload(
 	logger.Info("  Stopping all services...")
 	stopAndCleanupServices(runningServices, serviceShutdownTimeout, true)
 
-	newProvider, newModelID, err := createStartupProvider(newCfg, allowEmptyStartup)
+	newProvider, primaryModelConfig, err := createStartupProvider(newCfg, allowEmptyStartup)
 	if err != nil {
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
@@ -628,14 +621,10 @@ func handleConfigReload(
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
 
-	if newModelID != "" {
-		newCfg.Agents.Defaults.ModelName = newModelID
-	}
-
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
 
-	if err := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg); err != nil {
+	if err := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg, primaryModelConfig); err != nil {
 		logger.Errorf("  ⚠ Error reloading agent loop: %v", err)
 		if cp, ok := newProvider.(providers.StatefulProvider); ok {
 			cp.Close()

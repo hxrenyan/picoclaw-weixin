@@ -26,12 +26,13 @@ func (p *Pipeline) CallLLM(
 	exec *turnExecution,
 	iteration int,
 ) (Control, error) {
+	ctx = withContextAgent(ctx, ts.agent)
 	al := p.al
 	maxMediaSize := p.Cfg.Agents.Defaults.GetMaxMediaSize()
 
 	// PreLLM: resolve media refs (except on iteration 1 where user media is already resolved)
 	if iteration > 1 {
-		exec.messages = resolveMediaRefs(exec.messages, p.MediaStore, maxMediaSize, exec.currentTurnStart)
+		exec.messages = resolveMediaRefsForAgent(exec.messages, p.MediaStore, maxMediaSize, exec.currentTurnStart, ts.agent)
 	}
 
 	// PreLLM: graceful terminal handling
@@ -40,7 +41,8 @@ func (p *Pipeline) CallLLM(
 	exec.providerToolDefs = filterToolsByTurnProfile(exec.providerToolDefs, ts.profile)
 
 	// Native web search support
-	webSearchEnabled := al.cfg.Tools.IsToolEnabled("web") && turnProfileToolAllowed(ts.profile, "web_search")
+	webSearchEnabled := !ts.agent.Isolated && al.cfg.Tools.IsToolEnabled("web") &&
+		turnProfileToolAllowed(ts.profile, "web_search")
 	exec.useNativeSearch = webSearchEnabled && al.cfg.Tools.Web.PreferNative &&
 		func() bool {
 			if ns, ok := exec.activeProvider.(providers.NativeSearchCapable); ok {
@@ -426,11 +428,12 @@ func (p *Pipeline) CallLLM(
 				rebuildPromptReq := promptBuildRequestForTurn(ts, fullHistory, exec.summary, "", nil, p.Cfg)
 				rebuildPromptReq.ActiveSkills = append([]string(nil), contextualSkills...)
 				rebuilt := ts.agent.ContextBuilder.BuildMessagesFromPrompt(rebuildPromptReq)
-				return resolveMediaRefs(
+				return resolveMediaRefsForAgent(
 					rebuilt,
 					p.MediaStore,
 					maxMediaSize,
 					len(rebuilt)-len(protectedTurnTail),
+					ts.agent,
 				)
 			}
 			originalHistoryCount := len(exec.history)
@@ -570,13 +573,11 @@ func (p *Pipeline) CallLLM(
 			// thought message in CI even though the LLM produced reasoning content.
 			al.publishPicoReasoning(turnCtx, reasoningContent, ts.chatID, ts.sessionKey, exec.llmModelName)
 		}
-	} else {
-		go al.handleReasoning(
-			turnCtx,
-			reasoningContent,
-			ts.channel,
-			al.targetReasoningChannelID(ts.channel),
-		)
+	} else if !ts.agent.Isolated && reasoningContent != "" {
+		// 渠道级推理会话由多个账号共用，隔离 Agent 不能向其转发私有上下文。
+		if channelID := al.targetReasoningChannelID(ts.channel); channelID != "" {
+			go al.handleReasoning(turnCtx, reasoningContent, ts.channel, channelID)
+		}
 	}
 	al.emitEvent(
 		runtimeevents.KindAgentLLMResponse,

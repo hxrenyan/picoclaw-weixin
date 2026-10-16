@@ -122,6 +122,7 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, stri
 		return "", "", false
 	}
 	allocation := al.allocateRouteSession(route, msg)
-
-	return resolveScopeKey(allocation.SessionKey, msg.SessionKey), agent.ID, true
+	sessionKey := resolveScopeKey(allocation.SessionKey, msg.SessionKey)
+	al.rememberIsolatedSessionRoute(agent, sessionKey, normalizedInboundContext(msg), route, &allocation.Scope)
+	return sessionKey, agent.ID, true
 }

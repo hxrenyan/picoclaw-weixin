@@ -30,6 +30,13 @@ type ContextManager interface {
 	Clear(ctx context.Context, sessionKey string) error
 }
 
+type contextAgentKey struct{}
+
+// withContextAgent 将路由确认的实例传给上下文后端，避免从用户可写的会话元数据推断归属。
+func withContextAgent(ctx context.Context, agent *AgentInstance) context.Context {
+	return context.WithValue(ctx, contextAgentKey{}, agent)
+}
+
 // AssembleRequest is the input to Assemble.
 type AssembleRequest struct {
 	SessionKey string // session identifier

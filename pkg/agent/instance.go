@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
+	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -29,6 +30,7 @@ type AgentInstance struct {
 	Model                     string
 	Fallbacks                 []string
 	Workspace                 string
+	Isolated                  bool
 	MaxIterations             int
 	MaxTokens                 int
 	Temperature               float64
@@ -93,6 +95,7 @@ func NewAgentInstance(
 	defaults *config.AgentDefaults,
 	cfg *config.Config,
 	provider providers.LLMProvider,
+	primaryModelConfig ...*config.ModelConfig,
 ) *AgentInstance {
 	if cfg != nil {
 		// Keep the subprocess isolation runtime aligned with the latest loaded config
@@ -101,11 +104,25 @@ func NewAgentInstance(
 	}
 
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
+	isolated := agentCfg != nil && agentCfg.Isolated
+	if isolated {
+		// 隔离 Agent 必须按自己的模型配置创建 provider，不能复用主 Agent
+		// 已注入的 provider（它可能来自另一个别名候选或 CLI provider）。
+		provider = nil
+		localDefaults := *defaults
+		localDefaults.RestrictToWorkspace = true
+		localDefaults.AllowReadOutsideWorkspace = false
+		defaults = &localDefaults
+	}
 	os.MkdirAll(workspace, 0o755)
 
 	definition := loadAgentDefinition(workspace)
 
 	model := resolveAgentModel(agentCfg, defaults, definition)
+	if isolated {
+		// 工作目录内的 AGENT.md 可由用户修改，不能据此切换到有本机权限的模型。
+		model = defaults.GetModelName()
+	}
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 
 	restrict := defaults.RestrictToWorkspace
@@ -116,6 +133,11 @@ func NewAgentInstance(
 	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
 	agentToolAllowlist := resolveAgentToolAllowlist(definition)
 	agentMCPServerAllowlist := resolveAgentMCPServerAllowlist(definition)
+	if isolated {
+		allowReadPaths, allowWritePaths = nil, nil
+		agentToolAllowlist = isolatedToolAllowlist(agentToolAllowlist)
+		agentMCPServerAllowlist = map[string]struct{}{}
+	}
 
 	toolsRegistry := tools.NewToolRegistry()
 	toolsRegistry.SetAllowlist(agentToolAllowlist)
@@ -172,6 +194,9 @@ func NewAgentInstance(
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 		).
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker)
+	if isolated {
+		contextBuilder.skillsLoader = skills.NewSkillsLoader(workspace, "", "")
+	}
 
 	agentID := routing.DefaultAgentID
 	agentName := ""
@@ -215,13 +240,6 @@ func NewAgentInstance(
 		temperature = *defaults.Temperature
 	}
 
-	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
-	}
-	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
-	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)
-
 	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
 	if summarizeMessageThreshold == 0 {
 		summarizeMessageThreshold = 20
@@ -233,9 +251,21 @@ func NewAgentInstance(
 	}
 
 	// Resolve fallback candidates
-	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks)
 	usesInjectedPrimary := provider != nil &&
 		strings.TrimSpace(model) == strings.TrimSpace(defaults.GetModelName())
+	var selectedConfig *config.ModelConfig
+	if usesInjectedPrimary && len(primaryModelConfig) > 0 {
+		selectedConfig = primaryModelConfig[0]
+	}
+	candidates := resolveModelCandidates(cfg, defaults.Provider, model, fallbacks, selectedConfig)
+	var thinkingLevelStr string
+	if len(candidates) > 0 {
+		if mc, err := resolvedCandidateModelConfig(cfg, candidates[0], workspace); err == nil {
+			thinkingLevelStr = mc.ThinkingLevel
+		}
+	}
+	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
+	thinkingLevelConfigured := isConfiguredThinkingLevel(thinkingLevelStr)
 	if !usesInjectedPrimary && len(candidates) > 0 {
 		provider = resolvePrimaryProviderForCandidate(
 			cfg,
@@ -246,6 +276,9 @@ func NewAgentInstance(
 		)
 	} else if !usesInjectedPrimary {
 		provider = resolvePrimaryProviderForAgent(cfg, workspace, agentID, model, provider)
+	}
+	if isolated && provider == nil {
+		provider = &unavailableLLMProvider{model: model, err: fmt.Errorf("隔离 Agent 没有可用的模型 provider")}
 	}
 	imageCandidates := resolveModelCandidates(
 		cfg,
@@ -327,6 +360,7 @@ func NewAgentInstance(
 		Model:                     model,
 		Fallbacks:                 fallbacks,
 		Workspace:                 workspace,
+		Isolated:                  isolated,
 		MaxIterations:             maxIter,
 		MaxTokens:                 maxTokens,
 		Temperature:               temperature,
@@ -560,7 +594,11 @@ func resolvePrimaryProviderForCandidate(
 	candidate providers.FallbackCandidate,
 	fallback providers.LLMProvider,
 ) providers.LLMProvider {
-	if candidate.ConfigKey == "" && candidate.ConfigIndex == 0 {
+	// A raw model reference normally keeps the injected provider for the
+	// shared Agent. Isolated Agents intentionally clear that provider; resolve
+	// the raw reference through the model_list template instead of returning
+	// nil and making the Agent permanently unavailable.
+	if candidate.ConfigKey == "" && candidate.ConfigIndex == 0 && fallback != nil {
 		return fallback
 	}
 	modelCfg, err := resolvedCandidateModelConfig(cfg, candidate, workspace)
@@ -584,17 +622,7 @@ func resolvePrimaryProviderForCandidate(
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
 func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {
-		return expandHome(strings.TrimSpace(agentCfg.Workspace))
-	}
-	// Use the configured default workspace (respects PICOCLAW_HOME)
-	if agentCfg == nil || agentCfg.Default || agentCfg.ID == "" ||
-		routing.NormalizeAgentID(agentCfg.ID) == "main" {
-		return expandHome(defaults.Workspace)
-	}
-	// For named agents without explicit workspace, use default workspace with agent ID suffix
-	id := routing.NormalizeAgentID(agentCfg.ID)
-	return filepath.Join(expandHome(defaults.Workspace), "..", "workspace-"+id)
+	return config.ResolveAgentWorkspace(agentCfg, defaults)
 }
 
 // resolveAgentModel resolves the primary model for an agent.

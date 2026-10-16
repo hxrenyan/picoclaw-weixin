@@ -54,8 +54,8 @@ type BindAPI struct {
 	reload     func()
 	newClient  func(baseURL, proxy string) (qrAPI, error)
 
-	mu       sync.Mutex
-	flows    map[string]*bindFlow
+	mu    sync.Mutex
+	flows map[string]*bindFlow
 }
 
 type bindFlow struct {
@@ -384,6 +384,8 @@ func (a *BindAPI) saveBinding(channelName, accountKey, name, token, userID, botI
 	if err := UpsertCredentials(settings, accountKey, name, token, userID, botID, baseURL, ""); err != nil {
 		return err
 	}
+	// 外部绑定接口面向独立用户；整个渠道启用隔离，避免后续账号失效时回退到共享记忆。
+	settings.IsolateAccounts = true
 	return config.SaveConfig(a.configPath, cfg)
 }
 

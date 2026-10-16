@@ -27,6 +27,14 @@ func (al *AgentLoop) handleCommand(
 	if !commands.HasCommandPrefix(msg.Content) {
 		return "", false
 	}
+	if agent != nil && agent.Isolated {
+		name, _ := commands.CommandName(msg.Content)
+		switch name {
+		case "help", "start", "clear", "context", "stop", "btw", "use":
+		default:
+			return "独立用户模式不支持管理其他 Agent、切换模型或重载服务。", true
+		}
+	}
 
 	if matched, handled, reply := al.applyExplicitSkillCommand(msg.Content, agent, opts); matched {
 		return reply, handled
@@ -381,16 +389,14 @@ func (al *AgentLoop) buildCommandsRuntime(
 			if opts == nil {
 				return fmt.Errorf("process options not available")
 			}
-			// /clear can arrive before any turn has persisted session scope
-			// metadata (runAgentLoop records it per turn), so record it here to
-			// let the ContextManager resolve which agent owns the session.
+			// /clear 可能早于首个回合，先记录会话信息，再传入路由确认的实例。
 			ensureSessionMetadata(
 				agent.Sessions,
 				opts.Dispatch.SessionKey,
 				opts.Dispatch.SessionScope,
 				opts.Dispatch.SessionAliases,
 			)
-			return al.contextManager.Clear(ctx, opts.SessionKey)
+			return al.contextManager.Clear(withContextAgent(ctx, agent), opts.SessionKey)
 		}
 
 		rt.AskSideQuestion = func(ctx context.Context, question string) (string, error) {

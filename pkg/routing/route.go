@@ -21,6 +21,7 @@ type ResolvedRoute struct {
 	AccountID     string
 	SessionPolicy SessionPolicy
 	MatchedBy     string
+	Isolated      bool
 }
 
 // RouteResolver determines which agent handles a message.
@@ -39,6 +40,18 @@ func NewRouteResolver(cfg *config.Config) *RouteResolver {
 func (r *RouteResolver) ResolveRoute(inbound bus.InboundContext) ResolvedRoute {
 	channel := strings.ToLower(strings.TrimSpace(inbound.Channel))
 	accountID := NormalizeAccountID(inbound.Account)
+	if agent, required := r.cfg.ResolveWeixinIsolation(inbound.Channel, accountID); required || inbound.Raw["weixin_isolated"] == "true" {
+		id := ""
+		identity := inbound.Raw["weixin_bot_identity"]
+		if agent != nil && (identity == "" || identity == agent.ID) {
+			id = agent.ID
+		}
+		return ResolvedRoute{
+			AgentID: id, Channel: channel, AccountID: accountID,
+			SessionPolicy: SessionPolicy{Dimensions: []string{"chat", "sender"}},
+			MatchedBy:     "weixin-isolated", Isolated: true,
+		}
+	}
 	identityLinks := cloneIdentityLinks(r.cfg.Session.IdentityLinks)
 	view := buildDispatchView(inbound, identityLinks)
 

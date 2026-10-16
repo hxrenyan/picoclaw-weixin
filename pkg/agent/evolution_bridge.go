@@ -44,6 +44,12 @@ func newEvolutionBridge(
 	}
 
 	modelID := resolvedEvolutionModelID(cfg, provider)
+	if registry != nil {
+		if agent := registry.GetDefaultAgent(); agent != nil {
+			provider = agent.Provider
+			modelID = resolvedCandidateModel(agent.Candidates, agent.Model)
+		}
+	}
 	runtime, err := evolution.NewRuntime(evolution.RuntimeOptions{
 		Config: cfg.Evolution,
 		PatternClusterer: evolution.NewLLMPatternClusterer(
@@ -184,6 +190,18 @@ func (b *evolutionBridge) handleRuntimeTurnEnd(evt runtimeevents.Event) bool {
 func (b *evolutionBridge) handleTurnEndAsync(meta EventMeta, payload TurnEndPayload) bool {
 	if b == nil || b.runtime == nil {
 		return false
+	}
+	if payload.Isolated {
+		// Keep the decision made by the Agent that owned this turn. A config
+		// reload can remove that Agent before this asynchronous event arrives.
+		return false
+	}
+	if b.registry != nil {
+		if agent, ok := b.registry.GetAgent(meta.AgentID); ok && agent != nil && agent.Isolated {
+			// 隔离 Agent 不参与后台技能召回、草稿生成或冷路径应用，
+			// 避免全局/内置技能正文进入演化提示词。
+			return false
+		}
 	}
 
 	input := evolution.TurnCaseInput{
@@ -352,6 +370,9 @@ func registryWorkspaces(registry *AgentRegistry) []string {
 	seen := make(map[string]struct{}, len(registry.agents))
 	for _, agent := range registry.agents {
 		if agent == nil {
+			continue
+		}
+		if agent.Isolated {
 			continue
 		}
 		workspace := strings.TrimSpace(agent.Workspace)

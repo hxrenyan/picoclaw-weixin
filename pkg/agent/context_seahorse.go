@@ -35,7 +35,7 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	dbPath := agent.Workspace + "/sessions/seahorse.db"
 
 	// Create CompleteFn from provider
-	completeFn := providerToCompleteFn(agent.Provider, agent.Model)
+	completeFn := agentLoopToCompleteFn(al)
 
 	// Create engine
 	engine, err := seahorse.NewEngine(seahorse.Config{
@@ -65,6 +65,31 @@ func newSeahorseContextManager(_ json.RawMessage, al *AgentLoop) (ContextManager
 	}
 
 	return mgr, nil
+}
+
+// agentLoopToCompleteFn 每次摘要都读取当前实例，避免切换或重载后继续使用已关闭的 provider。
+func agentLoopToCompleteFn(al *AgentLoop) seahorse.CompleteFn {
+	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
+		al.activeRequestsInc()
+		defer al.activeRequestsDec()
+		registry := al.GetRegistry()
+		contextAgent, _ := ctx.Value(contextAgentKey{}).(*AgentInstance)
+		var agent *AgentInstance
+		if contextAgent != nil {
+			agent, _ = registry.GetAgent(contextAgent.ID)
+		} else {
+			agent = registry.GetDefaultAgent()
+		}
+		if agent == nil {
+			return "", fmt.Errorf("seahorse: no agent available for summarization")
+		}
+		if agent != contextAgent {
+			agent.modelStateMutex().RLock()
+			defer agent.modelStateMutex().RUnlock()
+		}
+		// 回合已持有同一实例的读锁；重载替换实例后，则需锁定新实例。
+		return providerToCompleteFn(agent.Provider, resolvedCandidateModel(agent.Candidates, agent.Model))(ctx, prompt, opts)
+	}
 }
 
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.

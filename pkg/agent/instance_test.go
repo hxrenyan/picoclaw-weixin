@@ -546,6 +546,28 @@ func TestResolvePrimaryProviderForCandidatePreservesInjectedProviderForRawModel(
 	}
 }
 
+func TestResolvePrimaryProviderForCandidateResolvesRawUsingProviderTemplateForIsolation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = "openrouter/deepseek/deepseek-v3.2"
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "openrouter-template",
+		Model:     "openrouter/auto",
+		APIBase:   "https://openrouter.ai/api/v1",
+		APIKeys:   config.SimpleSecureStrings("sk-or-test"),
+	}}
+	agent := NewAgentInstance(&config.AgentConfig{
+		ID:        "isolated",
+		Isolated:  true,
+		Workspace: t.TempDir(),
+	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	if _, ok := agent.Provider.(*providers.HTTPProvider); !ok {
+		t.Fatalf("隔离 Agent 的原始模型引用应使用模板创建 HTTP provider，实际 %T", agent.Provider)
+	}
+	if _, unavailable := agent.Provider.(*unavailableLLMProvider); unavailable {
+		t.Fatal("通过模板解析的原始模型引用不应变成不可用 provider")
+	}
+}
+
 func TestProviderForFallbackCandidateRejectsMissingCrossProvider(t *testing.T) {
 	agent := &AgentInstance{CandidateProviders: map[string]providers.LLMProvider{}}
 	activeProvider := &mockProvider{}

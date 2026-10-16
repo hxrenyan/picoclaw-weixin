@@ -4,6 +4,8 @@ PicoClaw connects WeChat personal accounts through the Tencent iLink API. One we
 
 What changed, what it does, and the limits are written up in [多 Bot 改动说明](multi-bot.zh.md).
 
+面向多个独立用户提供服务时，见 [用户数据与工具隔离](isolation.md)。外部扫码绑定成功后会自动开启该渠道的隔离模式；已有渠道可配置 `settings.isolate_accounts: true`。
+
 ## 🚀 Quick Onboarding
 
 The easiest way to set up the Weixin channel is using the interactive onboarding command:

@@ -28,7 +28,14 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 	opts ...AgentLoopOption,
 ) *AgentLoop {
-	registry := NewAgentRegistry(cfg, provider)
+	al := &AgentLoop{bus: msgBus, cfg: cfg, ownsRuntimeEvents: true}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(al)
+		}
+	}
+	registry := NewAgentRegistry(cfg, provider, al.primaryModelConfig)
+	al.primaryModelConfig = nil
 
 	// Set up shared fallback chain with rate limiting.
 	cooldown := providers.NewCooldownTracker()
@@ -63,23 +70,13 @@ func NewAgentLoop(
 		workerPoolSize = 1
 	}
 
-	al := &AgentLoop{
-		bus:               msgBus,
-		cfg:               cfg,
-		registry:          registry,
-		state:             stateManager,
-		fallback:          fallbackChain,
-		cmdRegistry:       commands.NewRegistry(commands.BuiltinDefinitions()),
-		evolution:         bridge,
-		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		workerSem:         make(chan struct{}, workerPoolSize),
-		ownsRuntimeEvents: true,
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(al)
-		}
-	}
+	al.registry = registry
+	al.state = stateManager
+	al.fallback = fallbackChain
+	al.cmdRegistry = commands.NewRegistry(commands.BuiltinDefinitions())
+	al.evolution = bridge
+	al.steering = newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode))
+	al.workerSem = make(chan struct{}, workerPoolSize)
 	if al.runtimeEvents == nil {
 		al.runtimeEvents = runtimeevents.NewBus()
 		al.ownsRuntimeEvents = true
@@ -290,7 +287,9 @@ func registerSharedTools(
 		spawnEnabled := cfg.Tools.IsToolEnabled("spawn")
 		spawnStatusEnabled := cfg.Tools.IsToolEnabled("spawn_status")
 		if (spawnEnabled || spawnStatusEnabled) && cfg.Tools.IsToolEnabled("subagent") {
-			subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace)
+			subagentManager := tools.NewSubagentManager(
+				agent.Provider, resolvedCandidateModel(agent.Candidates, agent.Model), agent.Workspace,
+			)
 			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
 
 			// Inject a media resolver so the legacy RunToolLoop fallback path can
@@ -298,7 +297,7 @@ func registerSharedTools(
 			// This keeps subagent vision support working even when the optimized
 			// sub-turn spawner path is unavailable.
 			subagentManager.SetMediaResolver(func(msgs []providers.Message) []providers.Message {
-				return resolveMediaRefs(msgs, al.mediaStore, cfg.Agents.Defaults.GetMaxMediaSize(), 0)
+				return resolveMediaRefsForAgent(msgs, al.mediaStore, cfg.Agents.Defaults.GetMaxMediaSize(), 0, agent)
 			})
 
 			// Set the spawner that links into AgentLoop's turnState

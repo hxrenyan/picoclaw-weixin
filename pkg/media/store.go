@@ -29,6 +29,7 @@ type MediaMeta struct {
 	Filename      string
 	ContentType   string
 	Source        string        // "telegram", "discord", "tool:image-gen", etc.
+	OwnerAgentID  string        // 入站附件所属的隔离 Agent，读取前必须匹配。
 	CleanupPolicy CleanupPolicy // defaults to CleanupPolicyDeleteOnCleanup
 }
 

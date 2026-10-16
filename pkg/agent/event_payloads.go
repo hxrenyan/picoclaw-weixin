@@ -40,6 +40,9 @@ type ToolExecutionRecord struct {
 
 // TurnEndPayload describes the completion of a turn.
 type TurnEndPayload struct {
+	// Isolated is captured from the Agent that owned the turn. It remains
+	// authoritative after a config reload removes that Agent from the registry.
+	Isolated              bool
 	Status                TurnEndStatus
 	Workspace             string
 	Iterations            int

@@ -39,19 +39,15 @@ func agentCmd(message, sessionKey, model string, debug bool) error {
 		cfg.Agents.Defaults.ModelName = model
 	}
 
-	provider, modelID, err := providers.CreateProvider(cfg)
+	provider, primaryModelConfig, err := providers.CreateProviderWithConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	// Use the resolved model ID from provider creation
-	if modelID != "" {
-		cfg.Agents.Defaults.ModelName = modelID
-	}
-
+	// 保留模型别名，运行时沿用 provider 已选中的配置。
 	msgBus := bus.NewMessageBus()
 	defer msgBus.Close()
-	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
+	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider, agent.WithPrimaryModelConfig(primaryModelConfig))
 	defer agentLoop.Close()
 
 	// Print agent startup info (only for interactive mode)

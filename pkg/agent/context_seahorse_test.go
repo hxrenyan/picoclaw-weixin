@@ -481,6 +481,64 @@ func TestProviderToCompleteFnError(t *testing.T) {
 	}
 }
 
+func TestSeahorseSummaryTracksCurrentModelAndProvider(t *testing.T) {
+	cfg := summaryModelConfig(t, "initial-model")
+	cfg.Agents.Defaults.ContextManager = "seahorse"
+	initial := &summaryModelProvider{}
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+	al := NewAgentLoop(cfg, msgBus, initial)
+	defer al.Close()
+	mgr, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatal("应启用 Seahorse 上下文管理器")
+	}
+	defer mgr.engine.Close()
+	assertSummary := func(key, model string, p *summaryModelProvider, routed *AgentInstance) {
+		t.Helper()
+		ctx := context.Background()
+		if routed != nil {
+			routed.modelStateMutex().RLock()
+			defer routed.modelStateMutex().RUnlock()
+			ctx = withContextAgent(ctx, routed)
+		}
+		for i := 0; i < 40; i++ {
+			if err := mgr.Ingest(ctx, &IngestRequest{
+				SessionKey: key,
+				Message:    providers.Message{Role: "user", Content: fmt.Sprintf("%d: %s", i, strings.Repeat("需要保留的对话内容 ", 100))},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := len(p.models)
+		result, err := mgr.engine.Compact(ctx, key, seahorse.CompactInput{Force: true})
+		if err != nil || result.LeafSummaries == 0 {
+			t.Fatalf("应实际调用模型生成摘要: %+v, %v", result, err)
+		}
+		if len(p.models) != before+1 || p.models[before] != model {
+			t.Fatalf("摘要 provider 或模型 ID 错误: %v, 期望 %s", p.models, model)
+		}
+	}
+	assertSummary("initial-summary", "initial-model", initial, nil)
+
+	switched := &summaryModelProvider{}
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.modelStateMutex().Lock()
+	agent.Model, agent.Provider = "switched", switched
+	agent.Candidates = []providers.FallbackCandidate{{Provider: "anthropic", Model: "switched-model"}}
+	initial.Close()
+	agent.modelStateMutex().Unlock()
+	assertSummary("switched-summary", "switched-model", switched, agent)
+
+	reloaded := &summaryModelProvider{}
+	newCfg := summaryModelConfig(t, "reloaded-model")
+	if err := al.ReloadProviderAndConfig(context.Background(), reloaded, newCfg); err != nil {
+		t.Fatal(err)
+	}
+	assertSummary("reloaded-summary", "reloaded-model", reloaded, agent)
+	assertSummary("reloaded-background-summary", "reloaded-model", reloaded, nil)
+}
+
 func TestSeahorseAdapterAssembleSubtractsMaxTokens(t *testing.T) {
 	// Create a real seahorse engine with temp DB
 	engine, err := seahorse.NewEngine(seahorse.Config{

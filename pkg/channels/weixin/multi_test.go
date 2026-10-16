@@ -6,11 +6,88 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/routing"
 )
+
+func TestWeixinIsolationInboundRetainsBindingIdentity(t *testing.T) {
+	for _, multiple := range []bool{false, true} {
+		name := "单 Bot"
+		if multiple {
+			name = "多 Bot"
+		}
+		t.Run(name, func(t *testing.T) {
+			settings := &config.WeixinSettings{IsolateAccounts: true, AccountID: "bot-default"}
+			settings.SetToken("token-default")
+			if multiple {
+				settings.Accounts = map[string]config.WeixinAccountSettings{
+					"shop": {Token: *config.NewSecureString("token-shop"), AccountID: "bot-shop"},
+				}
+			}
+			bc := &config.Channel{Type: config.ChannelWeixin, Enabled: true, AllowFrom: []string{"*"}}
+			if err := bc.Decode(settings); err != nil {
+				t.Fatal(err)
+			}
+			const channel = "weixin-business"
+			cfg := config.DefaultConfig()
+			cfg.Channels = config.ChannelsConfig{channel: bc}
+			decoded, err := bc.GetDecoded()
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := decoded.(*config.WeixinSettings)
+			messageBus := bus.NewMessageBus()
+			t.Cleanup(messageBus.Close)
+			ch, err := newWeixinChannelFromConfig(channel, bc, current, messageBus)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var bots []*WeixinChannel
+			switch runtime := ch.(type) {
+			case *WeixinChannel:
+				bots = append(bots, runtime)
+			case *multiWeixinChannel:
+				for _, bot := range runtime.bots {
+					bots = append(bots, bot)
+				}
+			}
+			resolver := routing.NewRouteResolver(cfg)
+			var received []bus.InboundContext
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			for _, bot := range bots {
+				bot.handleInboundMessage(ctx, WeixinMessage{
+					FromUserID: "user-1", ClientID: "message-1",
+					ItemList: []MessageItem{{Type: MessageItemTypeText, TextItem: &TextItem{Text: "我的私有消息"}}},
+				})
+				select {
+				case msg := <-messageBus.InboundChan():
+					if msg.Context.Raw["weixin_isolated"] != "true" {
+						t.Fatal("运行时 Bot 丢失隔离标记")
+					}
+					want, _ := cfg.ResolveWeixinIsolation(channel, bot.accountKey)
+					route := resolver.ResolveRoute(msg.Context)
+					if want == nil || !route.Isolated || route.AgentID != want.ID || msg.Context.Raw["weixin_bot_identity"] != want.ID {
+						t.Fatalf("接收时身份与隔离路由不一致: route=%+v, want=%+v, channel=%s, identity=%s", route, want, bot.Name(), msg.Context.Raw["weixin_bot_identity"])
+					}
+					received = append(received, msg.Context)
+				case <-ctx.Done():
+					t.Fatal("未收到入站消息")
+				}
+			}
+			current.IsolateAccounts = false
+			for _, inbound := range received {
+				if route := resolver.ResolveRoute(inbound); !route.Isolated || route.AgentID != "" {
+					t.Fatal("关闭隔离后，已排队的隔离消息不能进入共享 Agent")
+				}
+			}
+		})
+	}
+}
 
 func TestNewWeixinChannelFromConfigUsesOneLoopPerBot(t *testing.T) {
 	settings := &config.WeixinSettings{}

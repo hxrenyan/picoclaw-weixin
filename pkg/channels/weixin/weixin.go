@@ -437,6 +437,11 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		"from_user_id":  fromUserID,
 		"context_token": msg.ContextToken,
 		"session_id":    msg.SessionID,
+		"weixin_bot_identity": config.WeixinIsolationAgentID(c.Name(), c.accountKey,
+			c.config.AccountID, c.config.UserID, c.config.Token.String()),
+	}
+	if c.config.IsolateAccounts {
+		metadata["weixin_isolated"] = "true"
 	}
 	if c.accountKey != "" {
 		metadata["weixin_account"] = c.accountKey

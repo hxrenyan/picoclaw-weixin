@@ -162,6 +162,9 @@ func TestBindAPICreatesBotAndConfirmsWithoutReturningToken(t *testing.T) {
 		t.Fatalf("settings: %v", err)
 	}
 	spec := accountSpecByKey(settings, "bot-2")
+	if !settings.IsolateAccounts {
+		t.Fatal("外部绑定的用户必须自动开启渠道隔离")
+	}
 	if spec == nil || spec.Settings.Token.String() != "secret-bot-token" || spec.Name != "张三" {
 		t.Fatalf("saved bot = %#v", spec)
 	}

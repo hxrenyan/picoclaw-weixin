@@ -69,7 +69,7 @@ func (r *AgentRegistry) ListSpawnableAgents(agentID string) []AgentDescriptor {
 
 	parentID := routing.NormalizeAgentID(agentID)
 	parent, ok := r.agents[parentID]
-	if !ok || parent == nil {
+	if !ok || parent == nil || parent.Isolated {
 		return nil
 	}
 	if !agentHasSpawnTool(parent) {
@@ -91,7 +91,7 @@ func (r *AgentRegistry) ListSpawnableAgents(agentID string) []AgentDescriptor {
 	descriptors := make([]AgentDescriptor, 0, len(ids))
 	for _, id := range ids {
 		agent := r.agents[id]
-		if agent == nil {
+		if agent == nil || agent.Isolated {
 			continue
 		}
 		descriptors = append(descriptors, r.buildAgentDescriptorLocked(agent))

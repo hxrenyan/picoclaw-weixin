@@ -8,12 +8,16 @@ package agent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/h2non/filetype"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -63,6 +67,17 @@ func resolveMediaRefs(
 	maxSize int,
 	currentTurnStart int,
 ) []providers.Message {
+	return resolveMediaRefsForAgent(messages, store, maxSize, currentTurnStart, nil)
+}
+
+// resolveMediaRefsForAgent 校验隔离附件的归属，再复制进所属 Agent 的工作目录。
+func resolveMediaRefsForAgent(
+	messages []providers.Message,
+	store media.MediaStore,
+	maxSize int,
+	currentTurnStart int,
+	agent *AgentInstance,
+) []providers.Message {
 	if store == nil {
 		return messages
 	}
@@ -111,6 +126,21 @@ func resolveMediaRefs(
 				}
 				continue
 			}
+			if agent != nil && agent.Isolated {
+				if meta.OwnerAgentID != agent.ID {
+					logger.WarnCF("agent", "拒绝读取归属不匹配的隔离附件", map[string]any{"ref": ref, "agent_id": agent.ID})
+					continue
+				}
+				localPath, err = copyMediaIntoWorkspace(localPath, ref, agent.Workspace, maxSize)
+				if err != nil {
+					logger.WarnCF("agent", "复制隔离附件到工作目录失败", map[string]any{
+						"ref":      ref,
+						"agent_id": agent.ID,
+						"error":    err.Error(),
+					})
+					continue
+				}
+			}
 
 			info, err := os.Stat(localPath)
 			if err != nil {
@@ -124,10 +154,16 @@ func resolveMediaRefs(
 			mime := detectMIME(localPath, meta)
 			pathTags = append(pathTags, buildPathTag(mime, localPath))
 
-			if m.Role == "tool" && idx >= currentTurnStart && strings.HasPrefix(mime, "image/") {
+			isolatedUserImage := m.Role == "user" && agent != nil && agent.Isolated
+			if (m.Role == "tool" || isolatedUserImage) && idx >= currentTurnStart && strings.HasPrefix(mime, "image/") {
 				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)
 				if dataURL != "" {
-					pendingToolImages = append(pendingToolImages, dataURL)
+					if isolatedUserImage {
+						// 图片已通过归属检查，直接提供视觉输入，无需开放 load_image。
+						resolved = append(resolved, dataURL)
+					} else {
+						pendingToolImages = append(pendingToolImages, dataURL)
+					}
 				}
 			}
 		}
@@ -146,6 +182,64 @@ func resolveMediaRefs(
 	}
 
 	return result
+}
+
+func copyMediaIntoWorkspace(localPath, ref, workspace string, maxSize int) (string, error) {
+	workspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	const dir = ".inbound-media"
+	if err := root.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	// 同一引用在重建提示词时复用副本，防止压缩和后续回合重复占用磁盘。
+	digest := sha256.Sum256([]byte(ref))
+	dstName := filepath.Join(dir, fmt.Sprintf("%x%s", digest, filepath.Ext(localPath)))
+	if info, err := root.Stat(dstName); err == nil && info.Mode().IsRegular() {
+		return filepath.Join(workspace, dstName), nil
+	}
+	src, err := os.Open(localPath)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > int64(maxSize) {
+		return "", fmt.Errorf("附件不是普通文件或超过大小限制")
+	}
+	// 使用 os.Root 限制中间目录和目标文件的符号链接，并以重命名原子提交副本。
+	tmpName := filepath.Join(dir, uuid.NewString()+".tmp")
+	dst, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = dst.Close()
+		_ = root.Remove(tmpName)
+	}()
+	n, err := io.Copy(dst, io.LimitReader(src, int64(maxSize)+1))
+	if err != nil {
+		return "", err
+	}
+	if n > int64(maxSize) {
+		return "", fmt.Errorf("附件超过大小限制")
+	}
+	if err := dst.Close(); err != nil {
+		return "", err
+	}
+	if err := root.Rename(tmpName, dstName); err != nil {
+		return "", err
+	}
+	return filepath.Join(workspace, dstName), nil
 }
 
 // encodeImageToDataURL base64-encodes an image file into a data URL.

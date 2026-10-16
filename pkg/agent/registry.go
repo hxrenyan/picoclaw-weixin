@@ -23,6 +23,7 @@ type AgentRegistry struct {
 func NewAgentRegistry(
 	cfg *config.Config,
 	provider providers.LLMProvider,
+	primaryModelConfig ...*config.ModelConfig,
 ) *AgentRegistry {
 	registry := &AgentRegistry{
 		cfg:      cfg,
@@ -36,14 +37,14 @@ func NewAgentRegistry(
 			ID:      "main",
 			Default: true,
 		}
-		instance := NewAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider)
+		instance := NewAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider, primaryModelConfig...)
 		registry.agents["main"] = instance
 		logger.InfoCF("agent", "Created implicit main agent (no agents.list configured)", nil)
 	} else {
 		for i := range agentConfigs {
 			ac := &agentConfigs[i]
 			id := routing.NormalizeAgentID(ac.ID)
-			instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+			instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, primaryModelConfig...)
 			registry.agents[id] = instance
 			logger.InfoCF("agent", "Registered agent",
 				map[string]any{
@@ -53,6 +54,19 @@ func NewAgentRegistry(
 					"model":     instance.Model,
 				})
 		}
+	}
+
+	isolatedAgents := cfg.IsolatedWeixinAgents()
+	var isolationErr error
+	if len(isolatedAgents) > 0 {
+		isolationErr = validateWeixinIsolationConfig(cfg)
+	}
+	for _, ac := range isolatedAgents {
+		if isolationErr != nil {
+			logger.ErrorCF("agent", "微信隔离 Agent 初始化被拒绝", map[string]any{"agent_id": ac.ID, "error": isolationErr.Error()})
+			continue
+		}
+		registry.agents[ac.ID] = NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
 	}
 
 	for _, instance := range registry.agents {
@@ -117,6 +131,10 @@ func (r *AgentRegistry) allowedMCPServers() map[string]struct{} {
 func (r *AgentRegistry) CanSpawnSubagent(parentAgentID, targetAgentID string) bool {
 	parent, ok := r.GetAgent(parentAgentID)
 	if !ok {
+		return false
+	}
+	target, exists := r.GetAgent(targetAgentID)
+	if parent.Isolated || (exists && target.Isolated) {
 		return false
 	}
 	return agentAllowsSubagent(parent, routing.NormalizeAgentID(targetAgentID))

@@ -58,7 +58,7 @@ func turnProfileNativeSearchCallable(
 	profile config.EffectiveTurnProfile,
 	agent *AgentInstance,
 ) bool {
-	if cfg == nil || agent == nil {
+	if cfg == nil || agent == nil || agent.Isolated {
 		return false
 	}
 	if !cfg.Tools.IsToolEnabled("web") || !cfg.Tools.Web.PreferNative {

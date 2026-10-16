@@ -34,13 +34,13 @@
 | 项目 | 支持情况 |
 |---|---|
 | 一个 Bot | 一次扫码、一个微信账号、一份令牌。同一个微信号不能绑到两个 Bot。 |
-| 每个人的记忆 | 按 Bot 分开，存在磁盘上。对话变长后，较早的内容收成摘要，仍留在这个人的会话里。 |
+| 每个人的记忆 | 聊天历史按 Bot 分开。开启 `settings.isolate_accounts` 后，每个 Bot 还有独立 Agent、长期记忆和工作目录；详见 [用户隔离](isolation.md)。 |
 | 多个微信渠道 | 可以。`channel_list` 里写多条 `type: weixin`，每条自己最多 64 个 Bot。每条渠道至少有一个启用且已绑定（有 token）的 Bot 才会启动。 |
 | 按人分发 | 消息里的 `from_user_id` 会写到 `sender`。`when.sender` 可以把不同微信用户交给不同 Agent。一个 Bot 就够。 |
 | 按 Bot 分发 | `when.channel` 填渠道名字，`when.account` 填 Bot key，例如 `shop`。 |
 | 别的服务展示二维码 | 可以。网关 `POST /api/weixin/binds`，请求头带 `Authorization: Bearer <bind_token>`。不指定 `account` 时每次新建一个 Bot。说明见 [微信渠道文档](README.zh.md)。 |
 | 同时回复 | 默认 1 路。`agents.defaults.max_parallel_turns` 设为 3 就是同时 3 路。这是原有 Agent 配置，不是这次新加的接口。 |
-| 空闲内存 | 网关大约 34MB。每多一个 Bot 大约 100KB。64 个 Bot 加上网关大约 42MB。128MB 全部给 PicoClaw、模型走云端时，空闲大约能挂 900 个 Bot；给正在进行的回复留余量，按大约 800 个。超过 64 个要再开渠道。 |
+| 空闲内存 | 独立用户模式还会创建独立 Agent、上下文和会话存储，容量需要按实际配置压测，不能套用每个 Bot 只有连接状态时的估算。超过 64 个 Bot 要另开渠道。 |
 
 Bot 的 key 只能用字母、数字、`_` 和 `-`。显示名可以是中文，1 到 40 个字。没填代理或接口地址的额外 Bot，沿用渠道上的 `proxy` 和 `base_url`。`enabled: false` 的 Bot 不会轮询。
 

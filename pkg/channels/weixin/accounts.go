@@ -236,12 +236,13 @@ func defaultAccountSpec(cfg *config.WeixinSettings) AccountSpec {
 	spec := AccountSpec{
 		Key: DefaultAccountKey,
 		Settings: config.WeixinSettings{
-			Token:      cfg.Token,
-			AccountID:  strings.TrimSpace(cfg.AccountID),
-			UserID:     strings.TrimSpace(cfg.UserID),
-			BaseURL:    cfg.BaseURL,
-			CDNBaseURL: cfg.CDNBaseURL,
-			Proxy:      cfg.Proxy,
+			IsolateAccounts: cfg.IsolateAccounts,
+			Token:           cfg.Token,
+			AccountID:       strings.TrimSpace(cfg.AccountID),
+			UserID:          strings.TrimSpace(cfg.UserID),
+			BaseURL:         cfg.BaseURL,
+			CDNBaseURL:      cfg.CDNBaseURL,
+			Proxy:           cfg.Proxy,
 		},
 	}
 	if _, acct, ok := findAccount(cfg, DefaultAccountKey); ok {

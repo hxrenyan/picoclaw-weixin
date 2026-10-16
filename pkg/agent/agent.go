@@ -67,7 +67,9 @@ type AgentLoop struct {
 
 	// activeTurnStates tracks active turns per session to prevent duplicates.
 	activeTurnStates sync.Map
-	subTurnCounter   atomic.Int64
+	// 隔离会话的可信路由仅保存在内存中，不能从用户可写的元数据恢复。
+	isolatedSessionRoutes sync.Map
+	subTurnCounter        atomic.Int64
 
 	turnSeq atomic.Uint64
 
@@ -80,7 +82,8 @@ type AgentLoop struct {
 
 	reloadFunc func() error
 
-	providerFactory func(*config.ModelConfig) (providers.LLMProvider, string, error)
+	providerFactory    func(*config.ModelConfig) (providers.LLMProvider, string, error)
+	primaryModelConfig *config.ModelConfig // 仅在构造 registry 时使用
 }
 
 // processOptions configures how a message is processed
@@ -386,6 +389,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	ctx context.Context,
 	provider providers.LLMProvider,
 	cfg *config.Config,
+	primaryModelConfig ...*config.ModelConfig,
 ) error {
 	// Validate inputs
 	if provider == nil {
@@ -405,7 +409,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 				registry = nil
 			}
 		}()
-		registry = NewAgentRegistry(cfg, provider)
+		registry = NewAgentRegistry(cfg, provider, primaryModelConfig...)
 	}()
 	if registry == nil {
 		if err := ctx.Err(); err != nil {

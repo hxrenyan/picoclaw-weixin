@@ -67,7 +67,7 @@ func (p *Pipeline) Finalize(
 
 	if !ts.opts.NoHistory && ts.opts.EnableSummary {
 		al.contextManager.Compact(
-			turnCtx,
+			withContextAgent(turnCtx, ts.agent),
 			&CompactRequest{
 				SessionKey: ts.sessionKey,
 				Reason:     ContextCompressReasonSummarize,

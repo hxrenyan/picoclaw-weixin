@@ -319,6 +319,8 @@ type AgentConfig struct {
 	Model     *AgentModelConfig `json:"model,omitempty"`
 	Skills    []string          `json:"skills,omitempty"`
 	Subagents *SubagentsConfig  `json:"subagents,omitempty"`
+	// Isolated 仅由微信隔离配置在运行时生成，不能由工作目录中的提示词放宽。
+	Isolated bool `json:"-"`
 }
 
 type SubagentsConfig struct {
@@ -670,12 +672,14 @@ type WeixinAccountSettings struct {
 }
 
 type WeixinSettings struct {
-	Token      SecureString `json:"token,omitzero"       yaml:"token,omitempty"     env:"PICOCLAW_CHANNELS_WEIXIN_TOKEN"`
-	AccountID  string       `json:"account_id,omitempty" yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_ACCOUNT_ID"`
-	UserID     string       `json:"user_id,omitempty"    yaml:"-"`
-	BaseURL    string       `json:"base_url"             yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_BASE_URL"`
-	CDNBaseURL string       `json:"cdn_base_url"         yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_CDN_BASE_URL"`
-	Proxy      string       `json:"proxy"                yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_PROXY"`
+	// IsolateAccounts 为每个已绑定 Bot 分配独立 Agent、记忆和工作目录。
+	IsolateAccounts bool         `json:"isolate_accounts,omitempty" yaml:"-"`
+	Token           SecureString `json:"token,omitzero"       yaml:"token,omitempty"     env:"PICOCLAW_CHANNELS_WEIXIN_TOKEN"`
+	AccountID       string       `json:"account_id,omitempty" yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_ACCOUNT_ID"`
+	UserID          string       `json:"user_id,omitempty"    yaml:"-"`
+	BaseURL         string       `json:"base_url"             yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_BASE_URL"`
+	CDNBaseURL      string       `json:"cdn_base_url"         yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_CDN_BASE_URL"`
+	Proxy           string       `json:"proxy"                yaml:"-"                   env:"PICOCLAW_CHANNELS_WEIXIN_PROXY"`
 	// BindToken lets another service ask the gateway for a WeChat login QR code.
 	// Callers send it as Authorization: Bearer <bind_token>.
 	BindToken SecureString                     `json:"bind_token,omitzero" yaml:"bind_token,omitempty" env:"PICOCLAW_CHANNELS_WEIXIN_BIND_TOKEN"`

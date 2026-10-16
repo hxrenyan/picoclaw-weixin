@@ -194,7 +194,7 @@ func resolveModelCandidate(
 			return providers.FallbackCandidate{}, false
 		}
 		for index, modelCfg := range cfg.ModelList {
-			if modelCfg == mc || modelConfigsResolveToSameEntry(modelCfg, mc, defaultProvider) {
+			if modelCfg == mc || modelConfigResolutionKey(defaultProvider, modelCfg) == candidate.ConfigKey {
 				candidate.ConfigIndex = index + 1
 				candidate.ConfigKey = modelConfigResolutionKey(defaultProvider, modelCfg)
 				break
@@ -220,12 +220,12 @@ func resolveModelCandidates(
 	defaultProvider string,
 	primary string,
 	fallbacks []string,
+	primaryConfig ...*config.ModelConfig,
 ) []providers.FallbackCandidate {
 	seen := make(map[string]bool)
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
 
-	addCandidate := func(raw string) {
-		candidate, ok := resolveModelCandidate(cfg, defaultProvider, raw)
+	addCandidate := func(candidate providers.FallbackCandidate, ok bool) {
 		if !ok {
 			return
 		}
@@ -238,9 +238,13 @@ func resolveModelCandidates(
 		candidates = append(candidates, candidate)
 	}
 
-	addCandidate(primary)
+	if len(primaryConfig) > 0 && primaryConfig[0] != nil {
+		addCandidate(candidateFromModelConfig(defaultProvider, primaryConfig[0]))
+	} else {
+		addCandidate(resolveModelCandidate(cfg, defaultProvider, primary))
+	}
 	for _, fallback := range fallbacks {
-		addCandidate(fallback)
+		addCandidate(resolveModelCandidate(cfg, defaultProvider, fallback))
 	}
 
 	return candidates

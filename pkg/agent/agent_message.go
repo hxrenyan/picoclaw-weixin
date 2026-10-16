@@ -87,6 +87,9 @@ func (al *AgentLoop) ProcessHeartbeatWithAccount(
 	ctx context.Context,
 	content, channel, chatID, accountID string,
 ) (string, error) {
+	if _, required := al.GetConfig().ResolveWeixinIsolation(channel, accountID); required {
+		return "", fmt.Errorf("微信隔离账号不接受共享工作目录的 heartbeat 任务")
+	}
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}
@@ -176,6 +179,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// agent-scoped keys supplied by the caller.
 	scopeKey := resolveScopeKey(allocation.SessionKey, msg.SessionKey)
 	sessionKey := scopeKey
+	al.rememberIsolatedSessionRoute(agent, sessionKey, msg.Context, route, &allocation.Scope)
 
 	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
 	if tool, ok := agent.Tools.Get("message"); ok {
@@ -242,6 +246,18 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	route := registry.ResolveRoute(inboundCtx)
 
 	agent, ok := registry.GetAgent(route.AgentID)
+	if route.Isolated && (!ok || !agent.Isolated) {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("微信隔离账号不可用，拒绝使用共享 Agent")
+	}
+	if ok && agent.Isolated && !route.Isolated {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("不能通过其他路由访问微信隔离 Agent")
+	}
+	if ok && agent.Isolated {
+		// 配置重载保留原上下文后端，必须同时核对实际运行的实例。
+		if _, legacy := al.contextManager.(*legacyContextManager); !legacy {
+			return routing.ResolvedRoute{}, nil, fmt.Errorf("微信隔离账号不支持当前上下文后端")
+		}
+	}
 	if !ok {
 		agent = registry.GetDefaultAgent()
 	}

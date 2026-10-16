@@ -312,21 +312,9 @@ func (al *AgentLoop) clearSteeringMessagesForScope(scope string) int {
 func (al *AgentLoop) continueWithSteeringMessages(
 	ctx context.Context,
 	agent *AgentInstance,
-	sessionKey, channel, chatID string,
-	scope *session.SessionScope,
+	dispatch DispatchRequest,
 	steeringMsgs []providers.Message,
 ) (string, error) {
-	dispatch := DispatchRequest{
-		SessionKey:   sessionKey,
-		SessionScope: session.CloneScope(scope),
-	}
-	if channel != "" || chatID != "" {
-		dispatch.InboundContext = &bus.InboundContext{
-			Channel:  channel,
-			ChatID:   chatID,
-			ChatType: inferChatTypeFromSessionScope(scope),
-		}
-	}
 	return al.runAgentLoop(ctx, agent, processOptions{
 		Dispatch:                dispatch,
 		DefaultResponse:         defaultResponse,
@@ -342,19 +330,24 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 	if registry == nil {
 		return nil
 	}
+	if cached, ok := al.isolatedSessionRoutes.Load(sessionKey); ok {
+		snapshot := cached.(DispatchRequest)
+		agent, _ := registry.GetAgent(snapshot.SessionScope.AgentID)
+		return agent
+	}
 
 	agentIDs := registry.ListAgentIDs()
 	sort.Strings(agentIDs)
 	for _, agentID := range agentIDs {
 		agent, ok := registry.GetAgent(agentID)
-		if !ok || agent == nil {
+		if !ok || agent == nil || agent.Isolated {
 			continue
 		}
 		resolvedAgentID := session.ResolveAgentID(agent.Sessions, sessionKey)
 		if resolvedAgentID == "" {
 			continue
 		}
-		if scopedAgent, ok := registry.GetAgent(resolvedAgentID); ok {
+		if scopedAgent, ok := registry.GetAgent(resolvedAgentID); ok && !scopedAgent.Isolated {
 			return scopedAgent
 		}
 	}
@@ -401,6 +394,27 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID s
 	}
 
 	agent := al.agentForSession(sessionKey)
+	dispatch := DispatchRequest{SessionKey: sessionKey}
+	_, trustedIsolation := al.isolatedSessionRoutes.Load(sessionKey)
+	_, requiresIsolation := al.GetConfig().ResolveWeixinIsolation(channel, "")
+	if trustedIsolation || requiresIsolation {
+		var err error
+		dispatch, agent, err = al.isolatedContinuationDispatch(sessionKey, channel, chatID)
+		if err != nil {
+			al.activeTurnStates.Delete(sessionKey)
+			return "", err
+		}
+	} else if agent != nil {
+		if metaStore, ok := agent.Sessions.(session.MetadataAwareSessionStore); ok {
+			dispatch.SessionScope = session.CloneScope(metaStore.GetSessionScope(sessionKey))
+		}
+		dispatch.InboundContext = &bus.InboundContext{
+			Channel: channel, ChatID: chatID, ChatType: inferChatTypeFromSessionScope(dispatch.SessionScope),
+		}
+		if dispatch.SessionScope != nil {
+			dispatch.InboundContext.Account = dispatch.SessionScope.Account
+		}
+	}
 	if agent == nil {
 		al.activeTurnStates.Delete(sessionKey)
 		return "", fmt.Errorf("no agent available for session %q", sessionKey)
@@ -412,12 +426,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID s
 		}
 	}
 
-	var scope *session.SessionScope
-	if metaStore, ok := agent.Sessions.(session.MetadataAwareSessionStore); ok {
-		scope = metaStore.GetSessionScope(sessionKey)
-	}
-
-	return al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, scope, steeringMsgs)
+	return al.continueWithSteeringMessages(ctx, agent, dispatch, steeringMsgs)
 }
 
 func (al *AgentLoop) InterruptGraceful(hint string) error {

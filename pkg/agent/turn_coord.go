@@ -51,6 +51,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 			runtimeevents.KindAgentTurnEnd,
 			ts.eventMeta("runTurn", "turn.end"),
 			TurnEndPayload{
+				Isolated:              ts.agent != nil && ts.agent.Isolated,
 				Status:                turnStatus,
 				Workspace:             ts.workspace,
 				Iterations:            ts.currentIteration(),
@@ -156,7 +157,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, al.mediaStore, maxMediaSize, 0)
+			resolvedPending := resolveMediaRefsForAgent(pendingMessages, al.mediaStore, maxMediaSize, 0, ts.agent)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])
@@ -403,7 +404,7 @@ func (al *AgentLoop) askSideQuestion(
 	var history []providers.Message
 	var summary string
 	if opts != nil && !opts.NoHistory {
-		if resp, err := al.contextManager.Assemble(ctx, &AssembleRequest{
+		if resp, err := al.contextManager.Assemble(withContextAgent(ctx, agent), &AssembleRequest{
 			SessionKey: opts.SessionKey,
 			Budget:     agent.ContextWindow,
 			MaxTokens:  agent.MaxTokens,
@@ -444,7 +445,7 @@ func (al *AgentLoop) askSideQuestion(
 	if strings.TrimSpace(question) != "" || len(media) > 0 {
 		currentTurnStart = len(messages) - 1
 	}
-	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize, currentTurnStart)
+	messages = resolveMediaRefsForAgent(messages, al.mediaStore, maxMediaSize, currentTurnStart, agent)
 
 	activeCandidates, activeModel, usedLight := al.selectCandidates(agent, question, messages)
 	selectedModelName := sideQuestionModelName(agent, usedLight)
@@ -668,7 +669,7 @@ func (al *AgentLoop) sideQuestionModelConfig(
 	if agent == nil {
 		return nil, fmt.Errorf("sideQuestionModelConfig: no agent available for /btw")
 	}
-	if candidate.ConfigIndex > 0 {
+	if candidate.ConfigKey != "" || candidate.ConfigIndex > 0 {
 		if modelCfg, err := resolvedCandidateModelConfig(
 			al.GetConfig(),
 			candidate,

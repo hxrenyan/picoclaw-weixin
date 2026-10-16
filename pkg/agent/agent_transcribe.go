@@ -17,6 +17,8 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 	}
 
 	// Transcribe each audio media ref in order.
+	owner, isolated := al.GetConfig().ResolveWeixinIsolation(msg.Channel, msg.Context.Account)
+	isolated = isolated || msg.Context.Raw["weixin_isolated"] == "true"
 	var transcriptions []string
 	var keptMedia []string
 	for _, ref := range msg.Media {
@@ -24,6 +26,11 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			keptMedia = append(keptMedia, ref)
+			continue
+		}
+		if isolated && (owner == nil || meta.OwnerAgentID != owner.ID ||
+			(msg.Context.Raw["weixin_bot_identity"] != "" && msg.Context.Raw["weixin_bot_identity"] != owner.ID)) {
+			// 转写早于路由执行，不能在此读取其他账号或换绑前的附件。
 			continue
 		}
 		if !utils.IsAudioFile(meta.Filename, meta.ContentType) {

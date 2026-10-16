@@ -668,7 +668,8 @@ func TestEvolutionBridge_DraftModePrefersConfigDefaultModelName(t *testing.T) {
 			Mode:    "draft",
 		},
 	}
-	cfg.Agents.Defaults.ModelName = "resolved-config-model"
+	cfg.Agents.Defaults.ModelName = "chat"
+	cfg.ModelList = []*config.ModelConfig{{ModelName: "chat", Model: "openai/resolved-config-model"}}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	defer al.Close()

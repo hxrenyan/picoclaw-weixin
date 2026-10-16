@@ -26,6 +26,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	basechannels "github.com/sipeed/picoclaw/pkg/channels"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/media"
 )
@@ -379,9 +380,11 @@ func (c *WeixinChannel) storeInboundBytes(
 		return "", err
 	}
 	ref, err := store.Store(tmpPath, media.MediaMeta{
-		Filename:      filename,
-		ContentType:   contentType,
-		Source:        "weixin",
+		Filename:    filename,
+		ContentType: contentType,
+		Source:      "weixin",
+		OwnerAgentID: config.WeixinIsolationAgentID(c.Name(), c.accountKey,
+			c.config.AccountID, c.config.UserID, c.config.Token.String()),
 		CleanupPolicy: media.CleanupPolicyDeleteOnCleanup,
 	}, basechannels.BuildMediaScope("weixin", chatID, messageID))
 	if err != nil {
