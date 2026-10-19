@@ -100,8 +100,8 @@ func TestWeixinIsolationDisablesNativeSearch(t *testing.T) {
 			capture := &nativeSearchCaptureProvider{}
 			alice.Provider, alice.CandidateProviders, alice.Candidates = capture, nil, nil
 			alice.ContextWindow = 100000
-			if alice.Tools.HasRegistered("web_search") {
-				t.Fatal("隔离白名单应拒绝注册网络搜索工具")
+			if !alice.Tools.HasRegistered("web_search") {
+				t.Fatal("隔离账号应注册客户端网络搜索工具")
 			}
 			if scenario == "回退模型" {
 				alice.Model = "primary-model"
@@ -129,6 +129,15 @@ func TestWeixinIsolationDisablesNativeSearch(t *testing.T) {
 			}
 			if capture.lastOpts == nil {
 				t.Fatal("模型没有收到调用")
+			}
+			searchVisible := false
+			for _, definition := range capture.tools {
+				if definition.Function.Name == "web_search" {
+					searchVisible = true
+				}
+			}
+			if !searchVisible {
+				t.Fatal("模型请求缺少客户端搜索工具")
 			}
 			if capture.lastOpts["native_search"] == true {
 				t.Fatal("隔离账号不能通过模型原生工具使用网络搜索")

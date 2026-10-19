@@ -65,6 +65,13 @@ func (al *AgentLoop) PublishResponseIfNeededWithAccount(
 	if response == "" {
 		return
 	}
+	if _, isolated := al.isolatedSessionRoutes.Load(sessionKey); isolated {
+		dispatch, _, err := al.isolatedContinuationDispatch(sessionKey, channel, chatID)
+		if err != nil || dispatch.InboundContext.Account != account {
+			logger.WarnCF("agent", "隔离任务绑定已变更，拒绝投递", nil)
+			return
+		}
+	}
 
 	alreadySentToSameChat := false
 	defaultAgent := al.GetRegistry().GetDefaultAgent()

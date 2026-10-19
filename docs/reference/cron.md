@@ -40,11 +40,11 @@ When rescheduling an existing task, use `list -> get -> update`. Do not use
 `remove -> add` just to change the schedule, because recreating a job can drop
 the original prompt, delivery target, or command payload.
 
-Remote channel access is scoped to the current `channel/chat_id`: remote callers
-can only list, get, or update jobs whose saved `payload.channel` and `payload.to`
-match the current conversation. Command jobs include a shell command payload, so
-they can only be listed, inspected, or updated from internal channels or remote
-channels allowed by `tools.cron.command_allowed_remotes`.
+远程任务访问按 `channel/chat_id/account` 隔离：列出、查询、修改、删除和启停任务均校验当前渠道、聊天及 Bot 账号；空账号与 `default` 等价，以兼容旧任务。微信隔离任务还保存 `payload.isolation_agent_id`，只允许创建时的 Bot 绑定身份管理和执行。换绑、删除或禁用账号、关闭隔离后，旧任务拒绝执行和投递；开启隔离前未保存身份的任务不会自动迁入。隔离任务禁止 Shell 命令，远程命令白名单和确认标记均不能绕过。任务账号和绑定身份随创建原子写盘，重启后仍有效。
+
+微信隔离任务执行期间不发布包含模型正文或工具参数预览的中间工具反馈，即使全局启用工具反馈也如此。最终结果须在执行结束后重新通过原绑定身份校验才可投递。
+
+普通（非隔离）命令任务包含 Shell 命令载荷，仅允许内部渠道或 `tools.cron.command_allowed_remotes` 授权的远程会话查看和管理。
 
 Example tool calls:
 

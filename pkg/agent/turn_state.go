@@ -120,8 +120,9 @@ type turnExecution struct {
 	summary          string
 	currentTurnStart int
 
-	// Turn output
 	finalContent string
+	// 续写前已经生成的正文，仅在当前轮保留，最终统一写入历史。
+	continuationContent string
 
 	// Iteration tracking
 	iteration int
@@ -139,6 +140,7 @@ type turnExecution struct {
 	allResponsesHandled bool
 	streamingPublisher  *streamingChunkPublisher
 	streamingFallback   bool
+	streamingDisabled   bool
 	suppressReasoning   bool
 	callMessages        []providers.Message
 	providerToolDefs    []providers.ToolDefinition

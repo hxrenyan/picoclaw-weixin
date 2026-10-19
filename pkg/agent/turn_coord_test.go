@@ -341,6 +341,81 @@ func TestPipeline_CallLLM_SimpleResponse(t *testing.T) {
 	}
 }
 
+func TestPipeline_CallLLM_TruncatedResponseRequestsContinuation(t *testing.T) {
+	provider := &sequenceProvider{
+		responses: []*providers.LLMResponse{
+			{Content: "first part", FinishReason: "truncated"},
+			{Content: "continued", FinishReason: "stop"},
+		},
+	}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+		turnID:  "turn-truncated",
+		context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+
+	ctrl, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1)
+	if err != nil {
+		t.Fatalf("CallLLM failed: %v", err)
+	}
+	if ctrl != ControlContinue {
+		t.Fatalf("control = %v, want ControlContinue", ctrl)
+	}
+	if len(exec.messages) < 2 {
+		t.Fatalf("messages length = %d, want continuation context", len(exec.messages))
+	}
+	if got := exec.messages[len(exec.messages)-2].Content; got != "first part" {
+		t.Fatalf("assistant continuation context = %q, want first part", got)
+	}
+
+	ctrl, err = pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 2)
+	if err != nil {
+		t.Fatalf("continuation CallLLM failed: %v", err)
+	}
+	if ctrl != ControlBreak {
+		t.Fatalf("continuation control = %v, want ControlBreak", ctrl)
+	}
+	if exec.finalContent != "first partcontinued" {
+		t.Fatalf("finalContent = %q, want complete response", exec.finalContent)
+	}
+}
+
+func TestPipeline_CallLLM_TruncatedResponseStopsAtIterationLimit(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{
+		responses: []*providers.LLMResponse{{Content: "partial", FinishReason: "truncated"}},
+	})
+	defer cleanup()
+	agent.MaxIterations = 1
+
+	pipeline := NewPipeline(al)
+	ts := newTurnState(agent, makeTestProcessOpts("test-session"), turnEventScope{
+		turnID:  "turn-truncated-limit",
+		context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(context.Background(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn failed: %v", err)
+	}
+
+	ctrl, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, 1)
+	if err != nil {
+		t.Fatalf("CallLLM failed: %v", err)
+	}
+	if ctrl != ControlBreak {
+		t.Fatalf("control = %v, want ControlBreak at iteration limit", ctrl)
+	}
+	if exec.finalContent != "partial" {
+		t.Fatalf("finalContent = %q, want partial response", exec.finalContent)
+	}
+}
+
 func TestPipeline_SetupTurn_ModelNameDoesNotUseFallbackAliasBeforeFallback(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

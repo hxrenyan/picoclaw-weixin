@@ -36,6 +36,23 @@ func TestSaveStore_FilePermissions(t *testing.T) {
 	}
 }
 
+func TestCronService_AddJobRollsBackOnSaveFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "jobs.json")
+	cs := NewCronService(path, nil)
+	payload := CronPayload{Kind: "agent_turn", Message: "提醒", Channel: "weixin", To: "user", Account: "alice", IsolationAgentID: "weixin-user-original"}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	job, err := cs.AddJob("提醒", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, payload.Message, payload.Channel, payload.To, payload)
+	if err == nil || job != nil {
+		t.Fatal("写盘失败不应返回成功任务")
+	}
+	if len(cs.ListJobs(true)) != 0 {
+		t.Fatal("写盘失败留下了内存任务")
+	}
+}
+
 func int64Ptr(v int64) *int64 {
 	return &v
 }

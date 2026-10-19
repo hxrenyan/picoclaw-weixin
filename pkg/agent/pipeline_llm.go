@@ -623,7 +623,30 @@ func (p *Pipeline) CallLLM(
 			return ControlContinue, nil
 		}
 
-		exec.finalContent = responseContent
+		if !exec.gracefulTerminal && len(exec.response.ToolCalls) == 0 &&
+			(exec.response.FinishReason == "truncated" || exec.response.FinishReason == "length") &&
+			strings.TrimSpace(exec.response.Content) != "" && iteration < ts.agent.MaxIterations {
+			cancelConfiguredStreamingLLM(turnCtx, exec)
+			exec.continuationContent += responseContent
+			exec.streamingDisabled = true
+			exec.messages = append(exec.messages,
+				providers.Message{Role: "assistant", Content: responseContent, ReasoningContent: reasoningContent},
+				providers.Message{
+					Role:    "user",
+					Content: "请从上次回答中断的位置继续，直接输出后续内容，不要重复已有文字或添加开场白；回答完整后正常结束。",
+				},
+			)
+			exec.finalContent = exec.continuationContent
+			logger.InfoCF("agent", "LLM output reached token limit; requesting continuation", map[string]any{
+				"agent_id":       ts.agent.ID,
+				"iteration":      iteration,
+				"content_chars":  len(responseContent),
+				"max_iterations": ts.agent.MaxIterations,
+			})
+			return ControlContinue, nil
+		}
+
+		exec.finalContent = exec.continuationContent + responseContent
 		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 			map[string]any{
 				"agent_id":      ts.agent.ID,
@@ -633,6 +656,8 @@ func (p *Pipeline) CallLLM(
 		return ControlBreak, nil
 	}
 	cancelConfiguredStreamingLLM(turnCtx, exec)
+	// 模型在续写时改为调用工具，已有正文随工具消息一起进入上下文。
+	exec.response.Content = exec.continuationContent + exec.response.Content
 
 	// Tool-call path: normalize and prepare for tool execution
 	exec.normalizedToolCalls = make([]providers.ToolCall, 0, len(exec.response.ToolCalls))

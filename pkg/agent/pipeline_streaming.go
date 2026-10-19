@@ -264,6 +264,9 @@ func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecutio
 		})
 		return false
 	}
+	if exec.streamingDisabled {
+		return false
+	}
 	if strings.TrimSpace(ts.channel) == "" || strings.TrimSpace(ts.chatID) == "" {
 		logger.DebugCF("agent", "configured streaming not used", map[string]any{
 			"agent_id": ts.agent.ID,

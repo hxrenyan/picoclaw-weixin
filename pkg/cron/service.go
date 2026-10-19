@@ -30,6 +30,8 @@ type CronPayload struct {
 	Channel string `json:"channel,omitempty"`
 	To      string `json:"to,omitempty"`
 	Account string `json:"account,omitempty"`
+	// IsolationAgentID 固定创建任务时的 Bot 绑定身份，禁止换绑后迁移任务。
+	IsolationAgentID string `json:"isolation_agent_id,omitempty"`
 }
 
 type CronJobState struct {
@@ -410,6 +412,7 @@ func (cs *CronService) AddJob(
 	schedule CronSchedule,
 	message string,
 	channel, to string,
+	payloadOverride ...CronPayload,
 ) (*CronJob, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -438,8 +441,12 @@ func (cs *CronService) AddJob(
 		DeleteAfterRun: deleteAfterRun,
 	}
 
+	if len(payloadOverride) > 0 {
+		job.Payload = payloadOverride[0]
+	}
 	cs.store.Jobs = append(cs.store.Jobs, job)
 	if err := cs.saveStoreUnsafe(); err != nil {
+		cs.store.Jobs = cs.store.Jobs[:len(cs.store.Jobs)-1]
 		return nil, err
 	}
 

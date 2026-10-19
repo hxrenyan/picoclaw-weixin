@@ -9,9 +9,9 @@ import (
 )
 
 // isolatedToolAllowlist 在工作目录提示词声明之外再收紧权限。
-// 仅开放工作目录内的文件操作，后续注册的命令、MCP、消息、定时任务和跨 Agent 工具也会被拒绝。
+// 开放工作目录内的文件操作、客户端搜索和受身份约束的定时任务，仍拒绝命令、MCP、消息和跨 Agent 工具。
 func isolatedToolAllowlist(declared []string) []string {
-	safe := []string{"read_file", "write_file", "edit_file", "append_file", "list_dir"}
+	safe := []string{"read_file", "write_file", "edit_file", "append_file", "list_dir", "web_search", "cron"}
 	if declared == nil {
 		return safe
 	}

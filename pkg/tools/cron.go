@@ -24,12 +24,63 @@ type JobExecutor interface {
 	PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string)
 }
 
+// 隔离任务执行器必须把原绑定身份传入路由，不能退回共享执行器。
+type isolatedJobExecutor interface {
+	ProcessDirectWithIsolation(ctx context.Context, content, sessionKey, channel, chatID, account, identity string) (string, error)
+}
+
 type accountJobExecutor interface {
 	ProcessDirectWithChannelAccount(
 		ctx context.Context,
 		content, sessionKey, channel, chatID, account string,
 	) (string, error)
 	PublishResponseIfNeededWithAccount(ctx context.Context, channel, chatID, sessionKey, response, account string)
+}
+
+func normalizedCronAccount(account string) string {
+	account = strings.ToLower(strings.TrimSpace(account))
+	if account == "" {
+		return "default"
+	}
+	return account
+}
+
+func (t *CronTool) currentConfig() *config.Config {
+	if source, ok := t.executor.(interface{ GetConfig() *config.Config }); ok {
+		return source.GetConfig()
+	}
+	return t.cfg
+}
+
+// isolationIdentity 只接受运行时会话身份，不接受模型参数指定账号或身份。
+func (t *CronTool) isolationIdentity(ctx context.Context) (string, error) {
+	account := ""
+	if scope := ToolSessionScope(ctx); scope != nil {
+		account = scope.Account
+	}
+	agent, required := t.currentConfig().ResolveWeixinIsolation(ToolChannel(ctx), account)
+	identity := ToolAgentID(ctx)
+	if required || strings.HasPrefix(identity, "weixin-user-") {
+		if agent == nil || agent.ID != identity {
+			return "", fmt.Errorf("isolated cron session binding is unavailable or changed")
+		}
+		return identity, nil
+	}
+	return "", nil
+}
+
+func (t *CronTool) validateJobBinding(job *cron.CronJob) error {
+	agent, required := t.currentConfig().ResolveWeixinIsolation(job.Payload.Channel, job.Payload.Account)
+	identity := job.Payload.IsolationAgentID
+	if required || identity != "" {
+		if agent == nil || identity == "" || agent.ID != identity {
+			return fmt.Errorf("cron bot binding is unavailable or changed")
+		}
+		if job.Payload.Command != "" {
+			return fmt.Errorf("isolated bots cannot execute scheduled shell commands")
+		}
+	}
+	return nil
 }
 
 func jobOutboundContext(channel, chatID, account string) bus.InboundContext {
@@ -47,6 +98,7 @@ type CronTool struct {
 	allowCommand          bool
 	execEnabled           bool
 	commandAllowedRemotes []string
+	cfg                   *config.Config
 }
 
 // NewCronTool creates a new CronTool
@@ -77,6 +129,7 @@ func NewCronTool(
 		execTool.SetTimeout(execTimeout)
 	}
 	return &CronTool{
+		cfg:                   config,
 		cronService:           cronService,
 		executor:              executor,
 		msgBus:                msgBus,
@@ -112,7 +165,7 @@ func (t *CronTool) Parameters() map[string]any {
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"add", "list", "get", "update", "remove", "enable", "disable"},
-				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Remote channels can only list/get/update jobs for the current channel/chat_id.",
+				"description": "Action to perform. Use 'get' before editing and 'update' to change existing jobs without losing their payload. Remote channels can only list/get/update jobs for the current channel/chat_id/account and original bot binding. Isolated bots cannot schedule shell commands.",
 			},
 			"name": map[string]any{
 				"type":        "string",
@@ -153,6 +206,9 @@ func (t *CronTool) Parameters() map[string]any {
 
 // Execute runs the tool with the given arguments
 func (t *CronTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if _, err := t.isolationIdentity(ctx); err != nil {
+		return ErrorResult(err.Error())
+	}
 	action, ok := args["action"].(string)
 	if !ok {
 		return ErrorResult("action is required")
@@ -232,6 +288,9 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	command, _ := args["command"].(string)
 	commandConfirm, _ := args["command_confirm"].(bool)
 	if command != "" {
+		if identity, err := t.isolationIdentity(ctx); err != nil || identity != "" {
+			return ErrorResult("isolated bots cannot schedule shell commands")
+		}
 		if !t.execEnabled {
 			return ErrorResult("command execution is disabled")
 		}
@@ -248,28 +307,24 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	// Truncate message for job name (max 30 chars)
 	messagePreview := utils.Truncate(message, 30)
 
+	identity, err := t.isolationIdentity(ctx)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	payload := cron.CronPayload{Kind: "agent_turn", Message: message, Channel: channel, To: chatID, Command: command, IsolationAgentID: identity}
+	if scope := ToolSessionScope(ctx); scope != nil {
+		payload.Account = scope.Account
+	}
 	job, err := t.cronService.AddJob(
 		messagePreview,
 		schedule,
 		message,
 		channel,
 		chatID,
+		payload,
 	)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
-	}
-	// Apply optional payload fields and persist in a single UpdateJob call
-	needsUpdate := false
-	if scope := ToolSessionScope(ctx); scope != nil {
-		job.Payload.Account = scope.Account
-		needsUpdate = true
-	}
-	if command != "" {
-		job.Payload.Command = command
-		needsUpdate = true
-	}
-	if needsUpdate {
-		t.cronService.UpdateJob(job)
 	}
 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
@@ -373,6 +428,11 @@ func (t *CronTool) updateJob(ctx context.Context, args map[string]any) *ToolResu
 	command, commandPresent, errResult := optionalString(args, "command")
 	if errResult != nil {
 		return errResult
+	}
+	if commandPresent && command != "" {
+		if identity, err := t.isolationIdentity(ctx); err != nil || identity != "" {
+			return ErrorResult("isolated bots cannot schedule shell commands")
+		}
 	}
 	if commandPresent {
 		if errResult := t.validateCommandMutation(ctx, args); errResult != nil {
@@ -567,8 +627,19 @@ func (t *CronTool) canAccessJob(ctx context.Context, job *cron.CronJob) bool {
 	if job.Payload.Channel != channel || job.Payload.To != chatID {
 		return false
 	}
+	account := ""
+	if scope := ToolSessionScope(ctx); scope != nil {
+		account = scope.Account
+	}
+	if normalizedCronAccount(account) != normalizedCronAccount(job.Payload.Account) {
+		return false
+	}
+	identity, err := t.isolationIdentity(ctx)
+	if err != nil || identity != job.Payload.IsolationAgentID {
+		return false
+	}
 	if job.Payload.Command != "" {
-		return isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes)
+		return identity == "" && isCommandAllowedRemote(channel, chatID, t.commandAllowedRemotes)
 	}
 	return true
 }
@@ -609,6 +680,9 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 
 // ExecuteJob executes a cron job through the agent
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
+	if err := t.validateJobBinding(job); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
@@ -664,7 +738,13 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	var response string
 	var err error
 	account := job.Payload.Account
-	if executor, ok := t.executor.(accountJobExecutor); ok {
+	if job.Payload.IsolationAgentID != "" {
+		executor, ok := t.executor.(isolatedJobExecutor)
+		if !ok {
+			return "Error: executor does not support isolated cron jobs"
+		}
+		response, err = executor.ProcessDirectWithIsolation(ctx, job.Payload.Message, sessionKey, channel, chatID, account, job.Payload.IsolationAgentID)
+	} else if executor, ok := t.executor.(accountJobExecutor); ok {
 		response, err = executor.ProcessDirectWithChannelAccount(
 			ctx,
 			job.Payload.Message,
@@ -680,6 +760,9 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
+	if err := t.validateJobBinding(job); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
 	if response != "" {
 		if executor, ok := t.executor.(accountJobExecutor); ok {
 			executor.PublishResponseIfNeededWithAccount(ctx, channel, chatID, sessionKey, response, account)

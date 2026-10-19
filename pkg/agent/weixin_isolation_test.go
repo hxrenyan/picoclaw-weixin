@@ -109,7 +109,7 @@ func TestWeixinIsolationMemoryFilesAndHistory(t *testing.T) {
 func TestWeixinIsolationCannotExpandToolsOrSpawn(t *testing.T) {
 	r, cfg := isolatedRegistry(t)
 	alice, bob := isolatedBot(t, r, "alice"), isolatedBot(t, r, "bob")
-	for _, name := range []string{"exec", "message", "cron", "spawn", "delegate", "subagent", "search_tools", "mcp_secret", "send_file", "load_image"} {
+	for _, name := range []string{"exec", "message", "spawn", "delegate", "subagent", "search_tools", "mcp_secret", "send_file", "load_image"} {
 		alice.Tools.Register(&allowlistTestTool{name: name})
 		alice.Tools.RegisterHidden(&allowlistTestTool{name: name})
 		if alice.Tools.HasRegistered(name) {

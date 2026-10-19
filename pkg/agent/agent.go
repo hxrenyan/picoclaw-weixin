@@ -28,6 +28,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -444,6 +445,25 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.mu.Lock()
 	oldRegistry := al.registry
 	oldEvolution := al.evolution
+	// CronTool 由网关注入，重建 Agent 时保留同一任务服务，避免扫码重载后工具消失。
+	if cfg.Tools.IsToolEnabled("cron") {
+		for _, previousID := range oldRegistry.ListAgentIDs() {
+			previous, exists := oldRegistry.GetAgent(previousID)
+			if !exists {
+				continue
+			}
+			tool, ok := previous.Tools.Get("cron")
+			if _, trusted := tool.(*tools.CronTool); !ok || !trusted {
+				continue
+			}
+			for _, id := range registry.ListAgentIDs() {
+				if instance, exists := registry.GetAgent(id); exists {
+					instance.Tools.Register(tool)
+				}
+			}
+			break
+		}
+	}
 
 	// Store new values
 	al.cfg = cfg

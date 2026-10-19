@@ -53,6 +53,22 @@ func (al *AgentLoop) ProcessDirectWithChannelAccount(
 	ctx context.Context,
 	content, sessionKey, channel, chatID, accountID string,
 ) (string, error) {
+	return al.processDirectWithIdentity(ctx, content, sessionKey, channel, chatID, accountID, "")
+}
+
+// ProcessDirectWithIsolation 固定任务创建时的绑定身份，复用入站消息的拒绝回退校验。
+func (al *AgentLoop) ProcessDirectWithIsolation(
+	ctx context.Context, content, sessionKey, channel, chatID, accountID, identity string,
+) (string, error) {
+	if identity == "" {
+		return "", fmt.Errorf("隔离任务缺少绑定身份")
+	}
+	return al.processDirectWithIdentity(ctx, content, sessionKey, channel, chatID, accountID, identity)
+}
+
+func (al *AgentLoop) processDirectWithIdentity(
+	ctx context.Context, content, sessionKey, channel, chatID, accountID, identity string,
+) (string, error) {
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return "", err
 	}
@@ -72,7 +88,11 @@ func (al *AgentLoop) ProcessDirectWithChannelAccount(
 		SessionKey: sessionKey,
 	}
 
-	return al.processMessage(ctx, msg)
+	if identity != "" {
+		msg.Context.Raw = map[string]string{"weixin_isolated": "true", "weixin_bot_identity": identity}
+	}
+	// 隔离定时任务仅在执行器复核绑定后投递最终结果，执行期间不发布工具反馈。
+	return al.processMessageWithToolFeedbackPolicy(ctx, msg, identity != "")
 }
 
 func (al *AgentLoop) ProcessHeartbeat(
@@ -143,6 +163,12 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	return al.processMessageWithToolFeedbackPolicy(ctx, msg, false)
+}
+
+func (al *AgentLoop) processMessageWithToolFeedbackPolicy(
+	ctx context.Context, msg bus.InboundMessage, suppressToolFeedback bool,
+) (string, error) {
 	msg = al.prepareInboundMessageForAgent(ctx, msg)
 
 	// Add message preview to log (show full content for error messages)
@@ -214,6 +240,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		DefaultResponse:         defaultResponse,
 		EnableSummary:           true,
 		SendResponse:            false,
+		SuppressToolFeedback:    suppressToolFeedback,
 		AllowInterimPicoPublish: true,
 	}
 	var err error
